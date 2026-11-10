@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+# tests/run.sh — checks that run on a laptop, with no server.
+#
+#   tests/run.sh                 everything it can
+#   VS_TEST_GATEWAY_DIR=DIR      use this avrp-gateway checkout instead of fetching the
+#                                pinned one (the checkout is only read)
+#   VS_TEST_NO_PG=1              skip the real-Postgres part
+#
+# Part 1  upgrade.sh --plan      offline
+# Part 2  db-init.sh --plan      offline, database state supplied from a file
+# Part 3  destructive-command lint over every script
+# Part 4  db-init.sh for real    against a THROWAWAY Postgres cluster this script
+#                                creates in a temp dir on its own port and deletes
+#                                afterwards. It never connects to any existing server,
+#                                so it cannot reach avrpdb / avrpdsdb.
+set -uo pipefail
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+T="$(mktemp -d "${TMPDIR:-/tmp}/vs-test.XXXXXX")"
+PGDATA_T=""
+cleanup() {
+  [ -n "$PGDATA_T" ] && pg_ctl -D "$PGDATA_T" -m immediate stop >/dev/null 2>&1
+  rm -rf "$T"
+}
+trap cleanup EXIT
+
+pass=0; failn=0
+ok()   { pass=$((pass + 1)); printf 'ok    %s\n' "$1"; }
+fail() { failn=$((failn + 1)); printf 'FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/        /'; }
+check() { # LABEL COMMAND... (passes if the command succeeds)
+  local label="$1"; shift
+  if "$@" >/dev/null 2>&1; then ok "$label"; else fail "$label"; fi
+}
+has()  { printf '%s' "$1" | grep -Eq -- "$2"; }
+expect()     { if has "$2" "$3"; then ok "$1"; else fail "$1" "$2"; fi; }
+expect_not() { if has "$2" "$3"; then fail "$1" "$2"; else ok "$1"; fi; }
+
+LOCK="$REPO/versions.lock"
+# A deployed.lock that says "exactly what versions.lock wants is installed".
+awk '$1 !~ /^#/ && NF == 6 && $2 == "host" { print $1, $5 }' "$LOCK" > "$T/deployed.same"
+plan() { "$REPO/scripts/upgrade.sh" --plan --deployed "$T/deployed.same" "$@" 2>&1; }
+bump() { # NAME -> a lock file where only NAME's sha differs
+  awk -v n="$1" '$1 == n { $5 = "0123456789abcdef0123456789abcdef01234567" } { print }' "$LOCK" > "$T/lock.$1"
+  printf '%s' "$T/lock.$1"
+}
+# The component names that head a section of the plan output.
+touched() { printf '%s\n' "$1" | grep -E '^[a-z][A-Za-z0-9_-]*$' | sort | tr '\n' ' '; }
+
+GIT_BEFORE="$(git -C "$REPO" status --porcelain 2>/dev/null)"
+echo "== Part 1: upgrade.sh --plan"
+out="$(plan)"; rc=$?
+[ $rc -eq 0 ] && ok "unchanged lock: exit 0" || fail "unchanged lock: exit 0" "$out"
+expect     "unchanged lock: says nothing to do" "$out" 'nothing to do'
+expect_not "unchanged lock: no actions listed"  "$out" '(fetch|deps|build|stop|start|record|db-init)[[:space:]]'
+
+out="$(plan --lock "$(bump segflow4d)")"; rc=$?
+[ $rc -eq 0 ] && ok "segflow4d only: exit 0" || fail "segflow4d only: exit 0" "$out"
+[ "$(touched "$out")" = "segflow4d " ] && ok "segflow4d only: the only component touched" || fail "segflow4d only: the only component touched" "$out"
+expect     "segflow4d only: fetches segflow4d"            "$out" 'fetch +fetch segflow4d at 0123456789'
+expect     "segflow4d only: reinstalls into handler env"  "$out" 'deps +pip install -e .*/segflow4d into conda env segflow4d'
+expect     "segflow4d only: stops the handler unit"       "$out" 'stop +stop unit valvescope-handler'
+expect     "segflow4d only: starts the handler unit"      "$out" 'start +start unit valvescope-handler'
+expect     "segflow4d only: records it"                   "$out" 'record +record segflow4d = 0123456789'
+expect_not "segflow4d only: no other unit"                "$out" 'valvescope-(gateway|manager|viewer|proxy)'
+expect_not "segflow4d only: no npm, build or database"    "$out" '(npm ci|next-build|vite-build|db-init|db-backup|conda env update)'
+[ "$(printf '%s\n' "$out" | grep -Ec '^ +[0-9]+\. ')" = "5" ] && ok "segflow4d only: exactly 5 actions" || fail "segflow4d only: exactly 5 actions" "$out"
+order="$(printf '%s\n' "$out" | awk '/^ +[0-9]+\. /{printf "%s ", $2}')"
+[ "$order" = "stop fetch deps start record " ] && ok "segflow4d only: order stop→fetch→deps→start→record" || fail "segflow4d only: order" "$order"
+
+out="$(plan --lock "$(bump avrp-gateway)")"
+[ "$(touched "$out")" = "avrp-gateway " ] && ok "gateway only: the only component touched" || fail "gateway only: the only component touched" "$out"
+expect     "gateway only: npm ci"                  "$out" 'deps +npm ci in .*/avrp-gateway'
+expect     "gateway only: database backup first"   "$out" 'db-backup'
+expect     "gateway only: db-init"                 "$out" 'db-init +install/db-init.sh'
+expect_not "gateway only: handler not restarted"   "$out" 'valvescope-handler'
+order="$(printf '%s\n' "$out" | awk '/^ +[0-9]+\. /{printf "%s ", $2}')"
+[ "$order" = "stop fetch deps db-backup db-init start record " ] && ok "gateway only: backup before db-init, both while stopped" || fail "gateway only: order" "$order"
+
+out="$(plan --lock "$(bump avrp-manager)")"
+expect     "manager only: render then build"       "$out" 'render .*
+.*build +next-build'
+expect_not "manager only: no other unit"           "$out" 'valvescope-(gateway|handler|viewer|proxy)'
+
+out="$(plan --lock "$(bump avrp-auto-seg)")"
+expect     "auto-seg only: conda env update"       "$out" 'conda env update avrp-auto-seg'
+expect_not "auto-seg only: no unit restarts"       "$out" '(stop|start) unit'
+
+out="$(plan --lock "$(bump avrp-ipad)")"
+expect     "client component (avrp-ipad): nothing to do" "$out" 'nothing to do'
+
+awk '$1 == "segflow4d" || $1 == "avrp-manager" { $5 = "0123456789abcdef0123456789abcdef01234567" } { print }' "$LOCK" > "$T/lock.two"
+out="$(plan --lock "$T/lock.two" --only segflow4d)"
+[ "$(touched "$out")" = "segflow4d " ] && ok "--only restricts a two-component change to one" || fail "--only restricts" "$out"
+out="$(plan --lock "$T/lock.two")"
+[ "$(touched "$out")" = "avrp-manager segflow4d " ] && ok "two changes: both planned, nothing else" || fail "two changes" "$out"
+out="$(plan --only no-such-thing)"; rc=$?
+[ $rc -ne 0 ] && ok "--only with an unknown name fails" || fail "--only with an unknown name fails" "$out"
+
+out="$("$REPO/scripts/upgrade.sh" --plan --deployed "$T/absent" 2>&1)"
+n="$(touched "$out" | wc -w | tr -d ' ')"
+[ "$n" = "8" ] && ok "no deployed.lock: all 8 host components planned (install order)" || fail "no deployed.lock: all 8 host components" "$out"
+
+# every host component of the lock has a map line, and the map has no strangers
+miss=""; for c in $(awk '$1 !~ /^#/ && NF == 6 { print $1 }' "$LOCK"); do
+  awk -v n="$c" '$1 == n && NF == 5 { f = 1 } END { exit f ? 0 : 1 }' "$REPO/components.map" || miss="$miss $c"; done
+for c in $(awk '$1 !~ /^#/ && NF == 5 { print $1 }' "$REPO/components.map"); do
+  awk -v n="$c" '$1 == n && NF == 6 { f = 1 } END { exit f ? 0 : 1 }' "$LOCK" || miss="$miss map-only:$c"; done
+[ -z "$miss" ] && ok "versions.lock and components.map name the same components" || fail "lock/map mismatch" "$miss"
+[ "$(git -C "$REPO" status --porcelain 2>/dev/null)" = "$GIT_BEFORE" ] && ok "plan mode wrote nothing into the repo" || fail "plan mode wrote into the repo" "$(git -C "$REPO" status --porcelain)"
+
+echo "== Part 2: db-init.sh --plan (offline)"
+GW="${VS_TEST_GATEWAY_DIR:-}"
+if [ -z "$GW" ]; then
+  if "$REPO/install/fetch-sources.sh" --dest "$T/src" --only avrp-gateway >"$T/fetch.log" 2>&1; then
+    GW="$T/src/avrp-gateway"
+  else
+    fail "fetch the pinned avrp-gateway (set VS_TEST_GATEWAY_DIR to test offline)" "$(cat "$T/fetch.log")"
+  fi
+fi
+if [ -n "$GW" ]; then
+  echo "      gateway SQL from $GW @ $(git -C "$GW" rev-parse --short HEAD 2>/dev/null)"
+  sha() { cat "$@" | shasum -a 256 | cut -d' ' -f1; }
+  fsha() { sha $(ls "$1"/functions/*.sql | LC_ALL=C sort); }
+  {
+    echo "role yes"
+    for pair in "vsdb:$GW/sql" "vsdsdb:$GW/data/db_adapters/sql"; do
+      db="${pair%%:*}"; dir="${pair#*:}"
+      echo "db $db populated"; echo "tracking $db yes"
+      echo "applied $db baseline:schemas.sql $(sha "$dir/schemas.sql")"
+      echo "applied $db baseline:seed.sql $(sha "$dir/seed.sql")"
+      echo "applied $db functions $(fsha "$dir")"
+      [ -d "$dir/migrations" ] && for m in $(ls "$dir/migrations"); do echo "applied $db migration:$m $(sha "$dir/migrations/$m")"; done
+    done
+  } > "$T/state.current"
+  dbplan() { "$REPO/install/db-init.sh" --plan --gateway-dir "$GW" "$@" 2>&1; }
+
+  out="$(dbplan --state-from "$T/state.current")"; rc=$?
+  [ $rc -eq 0 ] && ok "existing, current database: exit 0" || fail "existing, current database: exit 0" "$out"
+  expect     "existing, current database: nothing to do" "$out" 'nothing to do'
+
+  grep -v 'migration:005' "$T/state.current" > "$T/state.behind"
+  out="$(dbplan --state-from "$T/state.behind")"
+  expect     "existing database one migration behind: applies 005" "$out" 'apply-migration +005_root_diameter.sql'
+  expect_not "existing database: no create step"   "$out" '(create-role|create-database)'
+  expect_not "existing database: no schema or seed step" "$out" '(apply-schema|schemas\.sql|seed\.sql)'
+  [ "$(printf '%s\n' "$out" | grep -c 'apply-migration')" = "1" ] && ok "existing database: only the one missing migration" || fail "only the one missing migration" "$out"
+
+  printf 'role no\n' > "$T/state.fresh"
+  out="$(dbplan --state-from "$T/state.fresh")"
+  expect "fresh server: creates the role"            "$out" 'create-role'
+  [ "$(printf '%s\n' "$out" | grep -c 'create-database')" = "2" ] && ok "fresh server: creates both databases" || fail "fresh server: creates both databases" "$out"
+  [ "$(printf '%s\n' "$out" | grep -c 'apply-schema')" = "2" ]    && ok "fresh server: schema applied to both" || fail "fresh server: schema applied to both" "$out"
+  [ "$(printf '%s\n' "$out" | grep -c 'apply-migration')" = "5" ] && ok "fresh server: all 5 gateway migrations" || fail "fresh server: all 5 gateway migrations" "$out"
+
+  printf 'role yes\ndb vsdb populated\ntracking vsdb no\n' > "$T/state.foreign"
+  out="$(dbplan --state-from "$T/state.foreign")"; rc=$?
+  [ $rc -ne 0 ] && has "$out" 'not created by db-init' && ok "database with tables but no tracking: refused" || fail "foreign database refused" "$out"
+
+  sed 's/^applied vsdb baseline:seed.sql .*/applied vsdb baseline:seed.sql 0000/' "$T/state.current" > "$T/state.seedchanged"
+  out="$(dbplan --state-from "$T/state.seedchanged")"; rc=$?
+  [ $rc -ne 0 ] && has "$out" 'seed.sql changed' && ok "seed.sql edited in place upstream: stops" || fail "seed.sql edited in place: stops" "$out"
+
+  cp -R "$GW" "$T/gw-bad"; rm -rf "$T/gw-bad/.git"
+  printf 'begin;\ndrop table study;\ncommit;\n' > "$T/gw-bad/sql/migrations/006_bad.sql"
+  out="$("$REPO/install/db-init.sh" --plan --gateway-dir "$T/gw-bad" --state-from "$T/state.current" 2>&1)"; rc=$?
+  [ $rc -ne 0 ] && has "$out" 'removes whole tables' && ok "pending migration that drops a table: refused on a database with data" || fail "destructive migration refused" "$out"
+
+  VS_DEPLOY_ENV="$T/devnames.env"; sed 's/^VS_DB_NAME=.*/VS_DB_NAME=avrpdb/' "$REPO/config/deploy.env.example" > "$VS_DEPLOY_ENV"
+  out="$(VS_DEPLOY_ENV="$VS_DEPLOY_ENV" "$REPO/install/db-init.sh" --plan --gateway-dir "$GW" --state-from "$T/state.fresh" 2>&1)"; rc=$?
+  [ $rc -ne 0 ] && has "$out" 'reserved' && ok "database name avrpdb: refused" || fail "database name avrpdb refused" "$out"
+  unset VS_DEPLOY_ENV
+fi
+
+echo "== Part 3: destructive commands live only in destroy-*.sh"
+pat='(rm +-[a-zA-Z]*r|dropdb|drop +(database|table|schema)|truncate|reset-db|reset-data|rebuild-dev|git +clean|git +reset +--hard|mkfs|--delete)'
+hits=""
+for f in "$REPO"/install/*.sh "$REPO"/scripts/*.sh "$REPO"/config/*.sh; do
+  case "$(basename "$f")" in destroy-*.sh) continue ;; esac
+  h="$(grep -nEi "$pat" "$f" | grep -Ev '^[0-9]+:[[:space:]]*#' | grep -v 'lint:detect-only')"
+  [ -n "$h" ] && hits="$hits
+$(basename "$f"): $h"
+done
+[ -z "$hits" ] && ok "no destructive command outside destroy-*.sh" || fail "destructive command outside destroy-*.sh" "$hits"
+for f in "$REPO"/scripts/destroy-*.sh; do
+  grep -q -- '--yes-destroy-' "$f" && ok "$(basename "$f") needs an explicit --yes-destroy-… flag" || fail "$(basename "$f") has no confirmation flag"
+done
+
+echo "== Part 4: db-init.sh against a throwaway Postgres"
+if [ "${VS_TEST_NO_PG:-0}" = "1" ] || [ -z "$GW" ] || ! command -v initdb >/dev/null 2>&1 || ! command -v pg_ctl >/dev/null 2>&1; then
+  echo "skip  no initdb/pg_ctl on PATH (or VS_TEST_NO_PG=1) — real-database checks not run"
+else
+  PORT=54329
+  while nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; do PORT=$((PORT + 1)); done
+  PGDATA_T="$T/pg"
+  if ! LC_ALL=C initdb -D "$PGDATA_T" -U vs_test_admin -A trust -E UTF8 --locale=C >"$T/initdb.log" 2>&1 \
+     || ! LC_ALL=C pg_ctl -D "$PGDATA_T" -o "-p $PORT -c listen_addresses=127.0.0.1 -k $T" -l "$T/pg.log" -w start >/dev/null 2>&1; then
+    PGDATA_T=""
+    fail "start a throwaway Postgres cluster" "$(tail -5 "$T/initdb.log" "$T/pg.log" 2>/dev/null)"
+  else
+    echo "      throwaway cluster: $(psql -h 127.0.0.1 -p "$PORT" -U vs_test_admin -d postgres -Atc 'show server_version') on port $PORT"
+    export VS_DEPLOY_ENV="$T/deploy.env"
+    sed -e "s/^VS_PG_PORT=.*/VS_PG_PORT=$PORT/" -e 's/^VS_DB_NAME=.*/VS_DB_NAME=vs_test_main/' \
+        -e 's/^VS_DS_DB_NAME=.*/VS_DS_DB_NAME=vs_test_blob/' -e 's/^VS_DB_USER=.*/VS_DB_USER=vs_test_role/' \
+        -e 's/^VS_DB_PASSWORD=.*/VS_DB_PASSWORD=testpw123/' -e "s|^VS_BACKUP_DIR=.*|VS_BACKUP_DIR=$T/backup|" \
+        "$REPO/config/deploy.env.example" > "$VS_DEPLOY_ENV"
+    export VS_PG_ADMIN_PSQL="psql -h 127.0.0.1 -p $PORT -U vs_test_admin"
+    q() { psql -h 127.0.0.1 -p "$PORT" -U vs_test_admin -X -At -d "$1" -c "$2" 2>&1; }
+    dump() { pg_dump -h 127.0.0.1 -p "$PORT" -U vs_test_admin "$1" | grep -v '^\\\(un\)\{0,1\}restrict' | shasum | cut -d' ' -f1; }
+    dbinit() { "$REPO/install/db-init.sh" --gateway-dir "${GWX:-$GW}" "$@" 2>&1; }
+
+    out="$(dbinit)"; rc=$?
+    [ $rc -eq 0 ] && ok "first run on an empty cluster succeeds" || fail "first run on an empty cluster succeeds" "$out"
+    [ "$(q vs_test_main "select count(*) from pg_tables where schemaname='public'")" -gt 15 ] && ok "main database has its tables" || fail "main database has its tables"
+    [ "$(q vs_test_main "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'")" -ge 30 ] && ok "main database has its functions" || fail "main database has its functions"
+    [ "$(q vs_test_main "select count(*) from vs_schema_migrations where key like 'migration:%'")" = "5" ] && ok "5 migrations recorded" || fail "5 migrations recorded"
+    [ "$(q vs_test_main "select count(*) from information_schema.columns where table_name='study_module_status' and column_name='lease_expires_at'")" = "1" ] && ok "migration 001 really applied (lease column present)" || fail "migration 001 applied"
+    [ "$(q vs_test_blob "select count(*) from folders")" = "1" ] && ok "blob-metadata database seeded (root folder)" || fail "blob-metadata database seeded"
+    [ "$(q vs_test_main "select tableowner from pg_tables where tablename='study'")" = "vs_test_role" ] && ok "objects are owned by the deploy role" || fail "objects owned by deploy role"
+
+    # rows a real server would hold
+    q vs_test_main "insert into user_role(role_name) values ('vs-test-keep')" >/dev/null
+    q vs_test_blob "insert into folders(name, parent_id) values ('vs-test-keep', null)" >/dev/null
+    d1="$(dump vs_test_main)"; b1="$(dump vs_test_blob)"
+
+    out="$(dbinit --plan)"
+    expect     "plan against the existing databases: nothing to do" "$out" 'nothing to do'
+    expect_not "plan against the existing databases: no create or schema step" "$out" '(create-|apply-schema)'
+    out="$(dbinit)"; rc=$?
+    [ $rc -eq 0 ] && has "$out" 'nothing to do' && ok "second run: nothing to do" || fail "second run: nothing to do" "$out"
+    [ "$(dump vs_test_main)" = "$d1" ] && [ "$(dump vs_test_blob)" = "$b1" ] && ok "second run: both databases byte-identical in pg_dump" || fail "second run changed a database"
+    [ "$(q vs_test_main "select count(*) from user_role where role_name='vs-test-keep'")" = "1" ] && ok "second run: inserted row kept (main)" || fail "inserted row kept (main)"
+    [ "$(q vs_test_blob "select count(*) from folders where name='vs-test-keep'")" = "1" ] && ok "second run: inserted row kept (blob metadata)" || fail "inserted row kept (blob)"
+
+    # a later release: one new forward migration and one changed function
+    cp -R "$GW" "$T/gw-next"; rm -rf "$T/gw-next/.git"
+    printf 'begin;\nalter table study add column if not exists vs_test_col int;\ncommit;\n' > "$T/gw-next/sql/migrations/006_test.sql"
+    printf '\n-- changed\n' >> "$T/gw-next/sql/functions/fn_get_user_info.sql"
+    out="$(GWX="$T/gw-next" dbinit)"; rc=$?
+    [ $rc -eq 0 ] && has "$out" 'apply-migration +006_test.sql' && ok "new release: applies only the new migration" || fail "new release: applies the new migration" "$out"
+    expect_not "new release: no schema, seed or create step" "$out" '(create-|apply-schema)'
+    [ "$(printf '%s\n' "$out" | grep -c '== .*apply-migration')" = "1" ] && ok "new release: old migrations not re-run" || fail "old migrations not re-run" "$out"
+    [ "$(q vs_test_main "select count(*) from information_schema.columns where table_name='study' and column_name='vs_test_col'")" = "1" ] && ok "new release: migration took effect" || fail "migration took effect"
+    [ "$(q vs_test_main "select count(*) from user_role where role_name='vs-test-keep'")" = "1" ] && ok "new release: inserted row still there" || fail "row kept after migration"
+    out="$(GWX="$T/gw-next" dbinit)"
+    expect "new release: running it again does nothing" "$out" 'nothing to do'
+
+    # guards against a database with data
+    printf 'begin;\ndrop table study cascade;\ncommit;\n' > "$T/gw-next/sql/migrations/007_bad.sql"
+    out="$(GWX="$T/gw-next" dbinit)"; rc=$?
+    [ $rc -ne 0 ] && [ "$(q vs_test_main "select count(*) from pg_tables where tablename='study'")" = "1" ] && ok "table-dropping migration refused; table still there" || fail "table-dropping migration refused" "$out"
+    rm "$T/gw-next/sql/migrations/007_bad.sql"
+    printf '\n-- edited in place\n' >> "$T/gw-next/sql/seed.sql"
+    out="$(GWX="$T/gw-next" dbinit)"; rc=$?
+    [ $rc -ne 0 ] && has "$out" 'seed.sql changed' && ok "seed.sql edited in place: stops and changes nothing" || fail "seed.sql edited in place stops" "$out"
+
+    q postgres 'create database vs_test_foreign' >/dev/null; q vs_test_foreign 'create table t(x int); insert into t values (1)' >/dev/null
+    sed 's/^VS_DB_NAME=.*/VS_DB_NAME=vs_test_foreign/' "$T/deploy.env" > "$T/deploy.foreign.env"
+    out="$(VS_DEPLOY_ENV="$T/deploy.foreign.env" "$REPO/install/db-init.sh" --gateway-dir "$GW" 2>&1)"; rc=$?
+    [ $rc -ne 0 ] && [ "$(q vs_test_foreign 'select count(*) from t')" = "1" ] && ok "database made by something else: refused, untouched" || fail "foreign database refused" "$out"
+
+    # backup and the destroy guard
+    out="$("$REPO/scripts/backup.sh" --db-only --must-exist 2>&1)"; rc=$?
+    [ $rc -eq 0 ] && [ "$(find "$T/backup" -name '*.dump' | wc -l | tr -d ' ')" = "2" ] && ok "backup --db-only writes two dumps" || fail "backup --db-only" "$out"
+    out="$("$REPO/scripts/destroy-databases.sh" 2>&1)"; rc=$?
+    [ $rc -ne 0 ] && has "$out" 'Nothing deleted' && has "$out" 'vs_test_main: .* tables' && ok "destroy-databases without a flag: lists, deletes nothing" || fail "destroy without flag" "$out"
+    [ "$(q postgres "select count(*) from pg_database where datname like 'vs_test_%'")" = "3" ] && ok "…and all databases are still there" || fail "databases still there"
+    out="$("$REPO/scripts/destroy-databases.sh" --yes-destroy-database postgres 2>&1)"; rc=$?
+    [ $rc -ne 0 ] && ok "destroy-databases refuses a name that is not this deployment's" || fail "destroy refuses foreign name" "$out"
+    out="$("$REPO/scripts/destroy-databases.sh" --yes-destroy-database vs_test_blob 2>&1)"; rc=$?
+    [ $rc -eq 0 ] && has "$out" 'vs_test_blob: .*WILL BE DELETED' && has "$out" 'vs_test_main: .*kept' \
+      && [ "$(q postgres "select string_agg(datname, ',' order by datname) from pg_database where datname like 'vs_test_%'")" = "vs_test_foreign,vs_test_main" ] \
+      && ok "destroy-databases with the flag: prints what goes, deletes only that one" || fail "destroy with flag" "$out"
+    unset VS_DEPLOY_ENV VS_PG_ADMIN_PSQL
+  fi
+fi
+
+echo
+echo "$pass passed, $failn failed"
+[ "$failn" -eq 0 ]

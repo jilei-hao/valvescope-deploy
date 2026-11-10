@@ -5,9 +5,10 @@ elsewhere (the `avrp-developer` wrapper and the `avrp-*` repositories); this
 repository holds no service code. It holds one known-good set of versions and the
 glue to install and operate them.
 
-> **Status: skeleton (2026-11-10).** The layout, the configuration generator,
-> `versions.lock` and `install/fetch-sources.sh` work. `install.sh`, `backup.sh`,
-> `upgrade.sh` and `rollback.sh` are stubs that describe their steps and exit 3.
+> **Status (2026-11-10): skeleton plus the two operating rules.** Fetching pinned
+> sources, rendering configuration, planning an upgrade and initialising the
+> databases work and are tested on a laptop (`tests/run.sh`). Nothing has run on the
+> server yet. `install.sh`, the full backup and `rollback.sh` are still stubs.
 > See [Status](#status) for the exact line.
 
 ## The contract
@@ -18,7 +19,7 @@ you through five things, each with one documented command:
 | Step | Command | Result |
 |---|---|---|
 | **Install** | `install/install.sh` | All services running; a study can be submitted, processed and viewed |
-| **Upgrade** | `scripts/upgrade.sh` | The versions in a new `versions.lock` are running; data kept |
+| **Upgrade** | `scripts/upgrade.sh` | Only the components whose pin changed are rebuilt and restarted; data kept |
 | **Rollback** | `scripts/rollback.sh` | The previous `versions.lock` is running again |
 | **Backup** | `scripts/backup.sh` | Both databases and the blob store copied to the lab NAS |
 | **Health** | `scripts/health.sh` | Exit 0 only if every service, database, disk and the GPU check out |
@@ -88,10 +89,58 @@ dev database names, `localhost` as the public host, and paths inside a developer
 checkout. Never run the dev reset scripts (`rebuild-dev.sh`, `npm run reset-db`)
 against the deployment's databases.
 
+## Two rules the scripts are built around
+
+**R1 — deploying never wipes data.** Install and upgrade are safe to run against a
+server that already holds studies, and safe to run twice.
+
+- `install/db-init.sh` creates the role and each database only if missing. It
+  applies the schema and seed data only to a database with no tables. On a
+  database that has data it applies only forward migrations it has not recorded
+  yet, plus the functions (code, not data) when they changed. `--plan` shows what
+  it would do without doing it.
+- It keeps a small table, `vs_schema_migrations`, in each database: what the
+  database was created from and which migrations it has had.
+- It stops, changing nothing, when something looks unsafe: a database it did not
+  create, a pending migration that removes whole tables, a schema or seed file
+  edited in place upstream, or the developer checkout's database names.
+- Nothing in `install/`, `scripts/` or `config/` drops, truncates, re-seeds or
+  clears a directory, and nothing calls the gateway's reset scripts or
+  `rebuild-dev.sh`. The blob root is never written to by this repository.
+- Anything that removes data is a separate script named `scripts/destroy-*.sh`.
+  Such a script does nothing without a `--yes-destroy-…` flag naming the exact
+  thing, and prints what it will remove first. Today there is one,
+  `destroy-databases.sh`. `tests/run.sh` fails if a destructive command appears
+  in any other script.
+
+**R2 — one component can be upgraded alone.**
+
+- `components.map` says, per component, what a change needs: the dependency step,
+  whether a build is needed, whether the database step runs, and which systemd
+  units restart. The edges were read from the code. Example: `segflow4d` is
+  imported inside the worker, so a new `segflow4d` means one `pip install -e`
+  into the worker's conda environment and a restart of the worker only.
+- The server records what is really installed in `$VS_STATE_DIR/deployed.lock`.
+  A component is written there only after all its steps succeeded.
+- `scripts/upgrade.sh` compares that file with `versions.lock` and acts only on
+  the difference. `--plan` prints the exact ordered actions and changes nothing;
+  `--only a,b` restricts it; with no difference it says so and exits 0.
+
+```
+$ scripts/upgrade.sh --plan          # after changing only the segflow4d line
+segflow4d
+   1. stop      stop unit valvescope-handler
+   2. fetch     fetch segflow4d at <new sha> (was <old sha>)
+   3. deps      pip install -e /opt/valvescope/src/segflow4d into conda env segflow4d
+   4. start     start unit valvescope-handler
+   5. record    record segflow4d = <new sha> in deployed.lock
+```
+
 ## Layout
 
 ```
 versions.lock            the pinned commit of every component (repo, tag, SHA, path)
+components.map           per component: dependency step, build, database step, units to restart
 config/
   deploy.env.example     copy to deploy.env — the single source of host, ports,
                          database names, paths and secrets
@@ -102,15 +151,21 @@ install/
   install.sh             bare host → running system            (stub)
   fetch-sources.sh       checks out exactly the SHAs in versions.lock
   gen-secrets.sh         fills the CHANGE_ME secrets in deploy.env
+  db-init.sh             role + both databases; create-if-missing, forward-only
 services/                systemd unit templates, valvescope.target, Caddyfile template
-scripts/                 start · stop · health · backup · upgrade · rollback
+scripts/
+  upgrade.sh             deployed vs wanted → plan → execute, per component
+  start · stop · health · backup · rollback
+  destroy-databases.sh   the only script that removes data; needs an explicit flag
+tests/run.sh             laptop tests: upgrade plans, db-init plans, a real db-init
+                         run against a throwaway Postgres, the destructive-command lint
 docs/
   RUNBOOK.md             for whoever operates the server
   TEAM_README.md         for the people who use ValveScope
 ```
 
 Generated files go to `rendered/` and into the fetched sources. Both are outside
-git; so is `config/deploy.env`.
+git; so are `config/deploy.env` and the server's `deployed.lock`.
 
 ## How the pieces fit
 
@@ -138,24 +193,69 @@ only ever configures.
 ## Trying the parts that work today
 
 ```bash
+tests/run.sh                           # everything below, checked automatically
 cp config/deploy.env.example config/deploy.env
 install/gen-secrets.sh
 config/render.sh                       # writes rendered/
 install/fetch-sources.sh --dest /tmp/vs-src
+scripts/upgrade.sh --plan              # no deployed.lock yet: prints the install order
+install/db-init.sh --plan --gateway-dir /tmp/vs-src/avrp-gateway   # asks Postgres; changes nothing
 ```
 
 ## Status
 
+"Tested" means `tests/run.sh` passes on a Mac (74 checks, 2026-11-10; the database
+part ran against a throwaway PostgreSQL 18 cluster — the server has 16).
+
 | Piece | State |
 |---|---|
-| `versions.lock`, `install/fetch-sources.sh` | working |
-| `config/render.sh`, templates, `install/gen-secrets.sh` | working |
+| `versions.lock`, `install/fetch-sources.sh` | working, tested |
+| `config/render.sh`, templates, `install/gen-secrets.sh` | working, tested by hand |
+| `components.map`, `scripts/upgrade.sh --plan`, `--only` | working, tested |
+| `scripts/upgrade.sh` executor | **written, never run** — it needs systemd, conda and the installed sources |
+| `install/db-init.sh` (plan and real) | working, tested: second run changes nothing and keeps inserted rows |
+| `scripts/backup.sh --db-only` | working, tested |
+| `scripts/destroy-databases.sh` and the destructive-command lint | working, tested |
 | systemd units, Caddyfile | written, **not yet run on the host** |
 | `scripts/start.sh`, `stop.sh` | thin wrappers over systemd, untested on the host |
 | `scripts/health.sh` | partial: unit, port, disk and GPU checks; DB and login checks to do |
-| `install/install.sh`, `backup.sh`, `upgrade.sh`, `rollback.sh` | stubs with their step lists |
+| `install/install.sh`, full `backup.sh`, `rollback.sh` | stubs with their step lists |
 
-Open design points, to settle in later work:
+### What upstream must change for R1 to hold over time
+
+`db-init.sh` is safe today because it refuses rather than guesses. These are the
+gaps in `avrp-gateway` (at the pinned SHA `3b8e4b2`) that it has to work around:
+
+1. **Schema and seed data are edited in place.** `sql/schemas.sql` and
+   `sql/seed.sql` are only read when a database is created. Upstream has changed
+   `seed.sql` without a matching migration (commit `20f2e3e` added the
+   `phase-detection` and `auto-segmentation` module rows and renumbered the
+   others; there is no migration 006). A server created before such a change
+   would never receive it. `db-init.sh` detects this and stops; the real fix is
+   the rule *every change to schema or reference data ships as a migration*.
+   This is the one true blocker: it does not affect the first install, it
+   affects the first upgrade that touches reference data.
+2. **The blob-metadata database has no migrations directory at all**
+   (`data/db_adapters/sql/` has only `schemas.sql`, `seed.sql`, `functions/`).
+   Any change to that schema has no forward path.
+3. **Migrations carry their own `begin`/`commit`**, so a migration and the record
+   that it ran cannot be one transaction. Safe only because all five say they can
+   be re-run; nothing enforces that for a sixth.
+4. **No migration tracking upstream.** The gateway's own scripts re-run every
+   migration on every reset. The tracking table here is ours, so a database
+   created by the gateway's scripts looks foreign to `db-init.sh` (`--adopt`).
+5. **Functions are fine:** all 30 + 11 files are `CREATE OR REPLACE`, and the
+   three that change a return type drop the old function first. Migration 003
+   must run before the functions, which `db-init.sh` does.
+6. **The blob-metadata seed inserts two fixed login tokens** (`admin`/`admin` and
+   a `gateway` token committed in git). Applied as-is at creation; whether those
+   rows are still used after the dataserver merge needs an upstream answer.
+7. **Hard-coded role.** `sql/create_user.sql` grants to `avrpdev`. Not used here:
+   the deploy role creates and owns everything.
+8. **`reset-db.sh` and friends drop the database.** Never called from here; the
+   lint forbids it.
+
+Other open design points:
 
 1. **Proxy paths.** `/api` and `/viewer` are a proposal. The web viewer builds
    its gateway address as `http://HOST:PORT` with no path, and has no base path,
@@ -165,6 +265,11 @@ Open design points, to settle in later work:
    and then the pin moves.
 3. **Release tags.** No pinned commit is tagged yet, and the `avrp-handler` pin
    sits on a feature branch rather than `main`.
-4. **Reproducible conda environments** exported from the working box.
-5. **A stable hostname** for the box instead of its DHCP address.
-6. **Licence** for this repository — not chosen yet.
+4. **Reproducible conda environments** exported from the working box. Until then
+   the `deps` steps for the worker assume the environments already exist.
+5. **Components pinned by wrapper commit** (`avrp-auto-seg`) show as changed
+   whenever the wrapper SHA moves, even if their own files did not.
+6. **Top-level `automatic_measurement`** in the lock is loaded by nothing; the
+   worker uses its own nested copy. It can probably leave the lock.
+7. **A stable hostname** for the box instead of its DHCP address.
+8. **Licence** for this repository — not chosen yet.

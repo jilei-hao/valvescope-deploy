@@ -1,0 +1,57 @@
+# components.map — what has to happen when ONE component of versions.lock changes.
+#
+# One component per line, whitespace-separated, five columns:
+#
+#   name   deps   build   db   restart
+#
+#   name     must match a name in versions.lock
+#   deps     dependency step to rerun after the new source is fetched:
+#              npm-ci                 npm ci in the component's checkout
+#              pip-e:handler          pip install -e <checkout> into the worker's conda env
+#              conda-update:autoseg   conda env update from the component's environment.yml
+#                                     (that file ends in "-e .", so it reinstalls the package too)
+#              -                      nothing
+#            "handler" / "autoseg" name the conda envs VS_HANDLER_ENV / VS_AUTOSEG_ENV.
+#   build    next-build | vite-build | -      (config is baked in at build, so the
+#            service .env is re-rendered first)
+#   db       yes = this component ships the database schema: back up both databases,
+#            then run install/db-init.sh (forward migrations only). "-" otherwise.
+#   restart  comma-separated systemd units to stop before and start after, or "-"
+#
+# Read by scripts/upgrade.sh. Every edge below was read from the code at the
+# pinned SHAs (2026-11-10), not assumed:
+#
+#   avrp-gateway       Node service. Owns sql/ (schema, migrations, functions) and
+#                      data/db_adapters/sql/ (blob-metadata schema) -> db = yes.
+#   avrp-handler       Runs as `python -m src.main` from its checkout in the worker env.
+#                      Its two git submodules (automatic_measurement, GoValve-Root-src)
+#                      ride along with it: fetch-sources initialises them at the commits
+#                      the handler records, so they need no line of their own.
+#   segflow4d          Imported IN-PROCESS by the handler (task_manager.py,
+#                      study_generator_worker.py) from the worker env. Nothing else loads it.
+#   avrp-auto-seg      Its own conda env. The handler never imports it; it starts the
+#                      `avrp-auto-seg` program by full path for each task
+#                      (helpers/auto_seg_helpers.py). A new version is picked up by the
+#                      next task, so no unit restarts.
+#   avrp-manager       Next.js; gateway address baked at build.
+#   avrp-view-service  Static bundle; gateway address baked at build. The file server
+#                      reads from disk on each request, so no unit restarts.
+#   avrp-util          Loaded by NO service. Only operator tools live here
+#                      (deployment/stage-study.mjs uses Node built-ins only).
+#   automatic_measurement
+#                      The top-level checkout is loaded by NOTHING: the handler imports
+#                      its own nested copy (src/modules/measurements/external/...).
+#                      Kept in the lock for now; a change here does not change the
+#                      running system. To change the measurement code, move the
+#                      submodule pointer in avrp-handler and bump the handler's pin.
+#   avrp-ipad          Client app, built on a Mac. Nothing on the server.
+
+avrp-gateway           npm-ci                -           yes  valvescope-gateway
+avrp-handler           pip-e:handler         -           -    valvescope-handler
+segflow4d              pip-e:handler         -           -    valvescope-handler
+avrp-auto-seg          conda-update:autoseg  -           -    -
+avrp-manager           npm-ci                next-build  -    valvescope-manager
+avrp-view-service      npm-ci                vite-build  -    -
+avrp-util              -                     -           -    -
+automatic_measurement  -                     -           -    -
+avrp-ipad              -                     -           -    -
