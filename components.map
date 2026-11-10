@@ -6,12 +6,13 @@
 #
 #   name     must match a name in versions.lock
 #   deps     dependency step to rerun after the new source is fetched:
-#              npm-ci                 npm ci in the component's checkout
-#              pip-e:handler          pip install -e <checkout> into the worker's conda env
-#              conda-update:autoseg   conda env update from the component's environment.yml
-#                                     (that file ends in "-e .", so it reinstalls the package too)
-#              -                      nothing
-#            "handler" / "autoseg" name the conda envs VS_HANDLER_ENV / VS_AUTOSEG_ENV.
+#              npm-ci               npm ci in the component's checkout
+#              pip-e:<env>          pip install -e <checkout> into that conda environment
+#              conda-update:<env>   conda env update from the component's own
+#                                   environment.yml (which ends in "-e .", so it
+#                                   reinstalls the package too)
+#              -                    nothing
+#            <env> is a name from environments.map (today: handler, autoseg).
 #   build    next-build | vite-build | -      (config is baked in at build, so the
 #            service .env is re-rendered first)
 #   db       yes = this component ships the database schema: back up both databases,

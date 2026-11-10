@@ -1,0 +1,33 @@
+# environments.map — the conda environments the deployment uses.
+#
+# One environment per line, whitespace-separated, four columns:
+#
+#   name   conda-env   env-file   units
+#
+#   name       the short name components.map uses in its deps column
+#              (pip-e:<name>, conda-update:<name>)
+#   conda-env  the real conda environment name, or $VARIABLE to take it from
+#              config/deploy.env (so one server can rename it)
+#   env-file   the file the environment is built from:
+#                envs/<file>.yml          a file in this repository
+#                src:<component>/<path>   a file inside a fetched component
+#   units      comma-separated systemd units that load this environment, or "-".
+#              They restart when the environment itself is rebuilt.
+#
+# Read by scripts/upgrade.sh. Adding an environment is one line here plus its
+# env-file; no script changes. How a change is noticed:
+#   - env-file in this repository: upgrade.sh compares its checksum with the one in
+#     $VS_STATE_DIR/deployed.envs. Different or absent -> create or update the
+#     environment, restart its units, record it.
+#   - env-file inside a component (src:...): the component's own line in
+#     components.map (deps = conda-update:<name>) rebuilds it when the component's
+#     pin moves, so nothing is tracked here.
+#   - env-file named here but not in the repository yet: the environment is taken
+#     as already existing and is not managed. upgrade.sh says so in every plan.
+#
+# NOTE handler: envs/handler.yml does not exist yet. It has to be exported from the
+# working environment on the lab box (WS-2). Until then the worker environment must
+# be created by hand.
+
+handler  $VS_HANDLER_ENV  envs/handler.yml                   valvescope-handler
+autoseg  $VS_AUTOSEG_ENV  src:avrp-auto-seg/environment.yml  -

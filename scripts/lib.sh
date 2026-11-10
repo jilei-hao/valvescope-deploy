@@ -28,3 +28,23 @@ not_implemented() {
   echo "$(basename "$0"): not implemented yet — $1" >&2
   exit 3
 }
+
+# --- models ---------------------------------------------------------------------
+vs_sha256() { # FILE -> sha256 of its contents
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | cut -d' ' -f1
+  else shasum -a 256 < "$1" | cut -d' ' -f1; fi
+}
+# Files whose CONTENT is hashed in a model's file list: weights and configuration.
+# Everything else is listed by size only. Changing this rule changes every checksum.
+vs_model_hashed() { # RELATIVE PATH -> success if this file gets a sha256
+  case "$1" in *.pth|*.pt|*.ckpt|*.onnx|*.json|*.pkl|*.yaml|*.yml) return 0 ;; *) return 1 ;; esac
+}
+vs_model_dir() { # LOCATION SUBDIR -> directory (LOCATION is a deploy.env variable or an absolute path)
+  local base
+  case "$1" in
+    /*) base="$1" ;;
+    *)  eval "base=\${$1:-}"
+        [ -n "$base" ] || { echo "valvescope: models.manifest names $1, which is not set in deploy.env" >&2; return 1; } ;;
+  esac
+  printf '%s/%s' "$base" "$2"
+}

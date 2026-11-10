@@ -20,6 +20,11 @@ check "proxy answers on $VS_HOST:$VS_PUBLIC_PORT" curl -sf -o /dev/null --max-ti
 check "blob root is writable" test -w "$VS_DATA_ROOT"
 check "work dir is writable"  test -w "$VS_WORK_DIR"
 check "GPU is visible"        nvidia-smi
+# These two print their own ok/warn/FAIL lines, one per model or problem.
+# Models: quick check only (presence + size). `scripts/verify-models.sh --full` reads the weights.
+"$(dirname "$0")/verify-models.sh" || fail=1
+# Modules: every name in VS_MODULE_LIST exists in the worker source and the gateway database.
+"$(dirname "$0")/check-modules.sh" || fail=1
 # TODO(WS-4): both databases reachable with the deploy role (psql, needs PGPASSWORD handling)
 # TODO(WS-4): gateway login works and a /data request returns 200 (catches the
 #             "boots healthy, 500s on every blob" failure)

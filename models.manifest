@@ -1,0 +1,45 @@
+# models.manifest — the model weights a deployment must have on disk.
+#
+# Weights are NOT in git and there is no artifact store: a person copies them to
+# the server. This file says which ones, which version, and how to tell that the
+# right bytes are in place.
+#
+# One model per line, whitespace-separated, six columns:
+#
+#   name   location   subdir   version   checksum   restart
+#
+#   name      short name; also names the file list models/<name>.files
+#   location  a config/deploy.env variable holding a directory (e.g. VS_CT_MODELS_DIR),
+#             or an absolute path
+#   subdir    the model's directory under location
+#   version   a label for people (date, training run, paper version)
+#   checksum  sha256 of models/<name>.files, or UNMEASURED
+#   restart   comma-separated systemd units to restart when the model changes, or "-"
+#
+# What the checksum covers. models/<name>.files lists EVERY file in the model
+# directory with its size, and a sha256 for the files that decide the model's
+# behaviour: weights and configuration (*.pth *.pt *.ckpt *.onnx *.json *.pkl
+# *.yaml *.yml). Other files (logs, validation outputs, images) are listed by size
+# only. The checksum column is the sha256 of that list, so one short value pins all
+# sizes and all weight hashes.
+#
+# Two ways to check a model against its list:
+#   quick  every listed file is present with the listed size       scripts/verify-models.sh
+#          (no file is read; fast enough for scripts/health.sh)
+#   full   quick, plus re-hash every file that has a sha256         scripts/verify-models.sh --full
+#          (reads the weights; minutes for multi-GB models; run by upgrade.sh
+#          before it records a model, and on demand)
+# Quick does not notice a weight file overwritten by another of exactly the same
+# size. Full does.
+#
+# To measure a model on the server:   scripts/model-manifest.sh --name <name> --write
+# A change of version or checksum here is an upgrade: scripts/upgrade.sh names the
+# model, tells you to put it in place by hand, verifies it in full, restarts the
+# units in the restart column and records it in $VS_STATE_DIR/deployed.models.
+#
+# The three lines below are PLACEHOLDERS: UNMEASURED means nobody has taken the
+# checksums yet. They can only be taken on the lab box, where the weights are.
+
+ct-loocv-f0       VS_CT_MODELS_DIR   Dataset900_LOOCV_f0             unversioned  UNMEASURED  valvescope-handler
+tee-final         VS_TEE_MODELS_DIR  Dataset2222_FinalAVData         unversioned  UNMEASURED  valvescope-handler
+tee-final-2chan   VS_TEE_MODELS_DIR  Dataset3333_FinalAVData_2Chan   unversioned  UNMEASURED  valvescope-handler

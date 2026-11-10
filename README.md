@@ -132,15 +132,58 @@ segflow4d
    1. stop      stop unit valvescope-handler
    2. fetch     fetch segflow4d at <new sha> (was <old sha>)
    3. deps      pip install -e /opt/valvescope/src/segflow4d into conda env segflow4d
-   4. start     start unit valvescope-handler
-   5. record    record segflow4d = <new sha> in deployed.lock
+   4. check-modules  every module in VS_MODULE_LIST exists in the worker source and the database
+   5. start     start unit valvescope-handler
+   6. record    record segflow4d = <new sha> in deployed.lock
 ```
+
+## Ready for new models, environments and modules
+
+Three more things change over a deployment's life besides code. Each is a table
+in this repository, so adding one is a line of data, not a script edit.
+
+**Model weights — `models.manifest`.** Weights are not in git and there is no
+artifact store; a person copies them to the server. The manifest says which
+models, which version, and how to tell the right bytes are there.
+
+- Each measured model has a file list, `models/<name>.files`: every file with its
+  size, plus a sha256 for the weights and configuration files (`*.pth`, `*.json`,
+  `*.pkl` and similar). The manifest's checksum is the sha256 of that list.
+- `scripts/verify-models.sh` checks **presence and size** of every file. It reads
+  no contents, so `health.sh` runs it every time. `--full` also re-hashes the
+  weights (minutes). The quick check cannot see a weight file replaced by another
+  of exactly the same size; the full one can.
+- `scripts/model-manifest.sh --name <name> --write` measures a model on the server.
+- A changed version or checksum is an upgrade. The plan names the model, says it
+  must be put in place **by hand**, verifies it in full, restarts the units in the
+  manifest's last column, and records it in `deployed.models`. If the files are not
+  right it stops before restarting anything.
+- The three known models are listed as `UNMEASURED` placeholders: the checksums can
+  only be taken on the lab box.
+
+**Conda environments — `environments.map`.** Name, real conda environment (or the
+`deploy.env` variable holding it), the file it is built from, and the units that
+load it. `components.map` refers to environments by name (`pip-e:<name>`), so a
+third environment is one line plus its file. An environment file kept in this
+repository (`envs/`) is tracked by checksum in `deployed.envs`; when it changes the
+plan rebuilds that environment and restarts its units.
+
+**Worker modules — the `VS_MODULE_LIST` guard.** A module must exist in the
+worker's registry at the pinned source *and* as a row in the gateway's `module`
+table before the worker may be told to run it. `scripts/check-modules.sh` checks
+both, and refuses an empty list or a duplicate. It runs in `health.sh`, in
+`config/render.sh` (list only) and in every upgrade just before the worker starts.
+A failure names the module and the side that lacks it.
 
 ## Layout
 
 ```
 versions.lock            the pinned commit of every component (repo, tag, SHA, path)
 components.map           per component: dependency step, build, database step, units to restart
+environments.map         per conda environment: real name, file it is built from, units that load it
+models.manifest          per model: where it lives, version, checksum, units to restart
+models/                  one file list per measured model (sizes + weight hashes)
+envs/                    environment files owned by the deployment (none yet)
 config/
   deploy.env.example     copy to deploy.env — the single source of host, ports,
                          database names, paths and secrets
@@ -154,11 +197,15 @@ install/
   db-init.sh             role + both databases; create-if-missing, forward-only
 services/                systemd unit templates, valvescope.target, Caddyfile template
 scripts/
-  upgrade.sh             deployed vs wanted → plan → execute, per component
+  upgrade.sh             deployed vs wanted → plan → execute, per component, environment, model
+  model-manifest.sh      measure a model directory on the server
+  verify-models.sh       are the weights on disk the listed ones (quick, or --full)
+  check-modules.sh       is every module in VS_MODULE_LIST runnable here
   start · stop · health · backup · rollback
   destroy-databases.sh   the only script that removes data; needs an explicit flag
 tests/run.sh             laptop tests: upgrade plans, db-init plans, a real db-init
-                         run against a throwaway Postgres, the destructive-command lint
+                         run against a throwaway Postgres, the destructive-command lint,
+                         a fictional third environment, a fake model, the module guard
 docs/
   RUNBOOK.md             for whoever operates the server
   TEAM_README.md         for the people who use ValveScope
@@ -204,7 +251,7 @@ install/db-init.sh --plan --gateway-dir /tmp/vs-src/avrp-gateway   # asks Postgr
 
 ## Status
 
-"Tested" means `tests/run.sh` passes on a Mac (74 checks, 2026-11-10; the database
+"Tested" means `tests/run.sh` passes on a Mac (126 checks, 2026-11-10; the database
 part ran against a throwaway PostgreSQL 18 cluster — the server has 16).
 
 | Piece | State |
@@ -214,11 +261,16 @@ part ran against a throwaway PostgreSQL 18 cluster — the server has 16).
 | `components.map`, `scripts/upgrade.sh --plan`, `--only` | working, tested |
 | `scripts/upgrade.sh` executor | **written, never run** — it needs systemd, conda and the installed sources |
 | `install/db-init.sh` (plan and real) | working, tested: second run changes nothing and keeps inserted rows |
+| `environments.map` and environment steps in the plan | plan tested (a fictional third environment needs no script change); creating or updating a real conda environment is **written, never run** |
+| `envs/handler.yml` (the worker's environment file) | **missing** — to be exported from the lab box; until then that environment is not managed |
+| `models.manifest`, `model-manifest.sh`, `verify-models.sh`, model steps in the plan | working, tested on a small fake model |
+| The three real models | **UNMEASURED placeholders** — checksums can only be taken on the lab box |
+| `scripts/check-modules.sh` | working, tested: source side against the pinned `avrp-handler`, database side against the throwaway Postgres |
 | `scripts/backup.sh --db-only` | working, tested |
 | `scripts/destroy-databases.sh` and the destructive-command lint | working, tested |
 | systemd units, Caddyfile | written, **not yet run on the host** |
 | `scripts/start.sh`, `stop.sh` | thin wrappers over systemd, untested on the host |
-| `scripts/health.sh` | partial: unit, port, disk and GPU checks; DB and login checks to do |
+| `scripts/health.sh` | partial: unit, port, disk, GPU, model (quick) and module checks; DB and login checks to do. Never run as a whole |
 | `install/install.sh`, full `backup.sh`, `rollback.sh` | stubs with their step lists |
 
 ### Upstream state for R1 (never wipe data)

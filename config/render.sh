@@ -72,6 +72,10 @@ for d in "$VS_HOME" "$VS_DATA_ROOT" "$VS_WORK_DIR"; do
   case "$d" in */avrp-developer*|*/avrp-dev*) die "$d is inside a developer checkout" ;; esac
 done
 
+# The module list must be usable before anything is rendered from it.
+VS_DEPLOY_ENV="$ENV_FILE" "$REPO_DIR/scripts/check-modules.sh" --list-only >/dev/null \
+  || { VS_DEPLOY_ENV="$ENV_FILE" "$REPO_DIR/scripts/check-modules.sh" --list-only >&2; die "fix VS_MODULE_LIST in $ENV_FILE"; }
+
 # --- Derived values (not set by hand) -----------------------------------------
 if [ "$VS_PUBLIC_PORT" = "80" ]; then
   VS_PUBLIC_ORIGIN="http://$VS_HOST"
