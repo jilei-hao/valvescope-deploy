@@ -1,0 +1,33 @@
+# versions.lock — the one known-good set of sources for a ValveScope deployment.
+#
+# One component per line, whitespace-separated, six columns:
+#
+#   name   role   url   tag   sha   path
+#
+#   name  directory the component is checked out to, under the sources dir
+#   role  host   = needed on the server; fetched by default
+#         client = pinned for the record (built elsewhere); fetched only with --all
+#   url   git remote
+#   tag   release tag that points at <sha>, or "-" if the commit is not tagged yet
+#   sha   full 40-char commit; this is what gets checked out, the tag is only a label
+#   path  "-" for a whole repo; otherwise a sub-directory of that repo
+#         (used for components that live inside the developer wrapper)
+#
+# Read by install/fetch-sources.sh. Change pins only through scripts/upgrade.sh
+# (once it exists) so the previous set is kept for rollback.
+#
+# Seeded 2026-11-10 from avrp-developer@main (91d7bbe) `git submodule status`.
+# No pinned commit carries a release tag yet — tagging them is a WS-2 to-do.
+# NOTE avrp-handler: this commit is on branch fix/handler-concurrency, not on main.
+
+avrp-gateway           host    https://github.com/jilei-hao/avrp-gateway.git           -  3b8e4b27d9e546dc11817485ca7f99e300bd10bf  -
+avrp-handler           host    https://github.com/jilei-hao/avrp-handler.git           -  c2bda4a9b8a96e2ff7ed23b140e9cbe6b4217fdd  -
+avrp-manager           host    https://github.com/jilei-hao/avrp-manager.git           -  58eba001d74139921e6a28561bf34463a85924b5  -
+avrp-view-service      host    https://github.com/jilei-hao/avrp-view-service.git      -  a530cc6cbf3b5a4ccee6fd5cc43f448b70b9de5c  -
+segflow4d              host    https://github.com/jilei-hao/segflow4d.git              -  6c93cdb9230534f1b5df72b7a5211d6412c85908  -
+avrp-util              host    https://github.com/jilei-hao/avrp-util.git              -  232a43f186e5ce513932149f7e3ba4d91ba2e7df  -
+automatic_measurement  host    https://github.com/jilei-hao/automatic_measurement.git  -  8d3194cec52ecea070490ddb1f25fa76151c2931  -
+
+# Tracked directly inside the developer wrapper (not submodules): pinned as wrapper SHA + path.
+avrp-auto-seg          host    https://github.com/jilei-hao/avrp-developer.git         -  91d7bbe62ec096b2795fcac150ee5d239ede23c0  avrp-auto-seg
+avrp-ipad              client  https://github.com/jilei-hao/avrp-developer.git         -  91d7bbe62ec096b2795fcac150ee5d239ede23c0  avrp-ipad

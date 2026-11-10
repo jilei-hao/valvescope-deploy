@@ -1,0 +1,17 @@
+[Unit]
+Description=ValveScope web viewer (static files from the vite build)
+After=network.target
+PartOf=valvescope.target
+
+[Service]
+Type=simple
+User=@VS_USER@
+Group=@VS_USER@
+# Needs a prior `vite build`. Serves the built bundle on loopback; nothing here
+# runs the viewer's code — it executes in each person's browser.
+ExecStart=@VS_CADDY_BIN@ file-server --root @VS_SRC_DIR@/avrp-view-service/dist --listen 127.0.0.1:@VS_VIEWER_PORT@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=valvescope.target

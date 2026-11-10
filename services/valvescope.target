@@ -1,0 +1,6 @@
+[Unit]
+Description=ValveScope (all services)
+Wants=valvescope-gateway.service valvescope-handler.service valvescope-manager.service valvescope-viewer.service valvescope-proxy.service
+
+[Install]
+WantedBy=multi-user.target

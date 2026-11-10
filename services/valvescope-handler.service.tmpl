@@ -1,0 +1,23 @@
+[Unit]
+Description=ValveScope worker (avrp-handler; GPU pipeline)
+After=network.target valvescope-gateway.service
+Wants=valvescope-gateway.service
+PartOf=valvescope.target
+
+[Service]
+Type=simple
+User=@VS_USER@
+Group=@VS_USER@
+# .env is read from the working directory, so this must be the checkout.
+WorkingDirectory=@VS_SRC_DIR@/avrp-handler
+# Always `python -m src.main` under the handler env. Never the bare
+# `avrp-handler` command: it can resolve to a stale editable install.
+ExecStart=@VS_HANDLER_PYTHON@ -m src.main
+Restart=on-failure
+RestartSec=10
+# Stop or crash kills every child process too, so no orphan keeps GPU memory.
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=valvescope.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=ValveScope gateway (REST API, auth, blob store)
+After=network.target postgresql.service
+Wants=postgresql.service
+PartOf=valvescope.target
+
+[Service]
+Type=simple
+User=@VS_USER@
+Group=@VS_USER@
+WorkingDirectory=@VS_SRC_DIR@/avrp-gateway
+# The gateway reads .env from its working directory. `node app.js`, never
+# `npm run dev` (nodemon is not a dependency).
+Environment=NODE_ENV=production
+ExecStart=@VS_NODE_BIN@ app.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=valvescope.target

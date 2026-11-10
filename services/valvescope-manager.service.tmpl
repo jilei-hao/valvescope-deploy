@@ -1,0 +1,18 @@
+[Unit]
+Description=ValveScope manager (case/study dashboard, Next.js)
+After=network.target valvescope-gateway.service
+PartOf=valvescope.target
+
+[Service]
+Type=simple
+User=@VS_USER@
+Group=@VS_USER@
+WorkingDirectory=@VS_SRC_DIR@/avrp-manager
+Environment=NODE_ENV=production
+# Needs a prior `next build`. Loopback only: the proxy is the public face.
+ExecStart=@VS_NODE_BIN@ node_modules/next/dist/bin/next start -H 127.0.0.1 -p @VS_MANAGER_PORT@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=valvescope.target

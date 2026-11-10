@@ -1,0 +1,31 @@
+# The real configuration and anything generated from it never go in git.
+config/deploy.env
+config/deploy.env.*
+!config/deploy.env.example
+config/accounts.txt
+versions.lock.previous
+rendered/
+
+# Service env files, wherever they turn up
+.env
+.env.*
+*.env
+!*.env.example
+!*.env.tmpl
+
+# Secrets and keys
+secrets/
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+*.pgpass
+.pgpass
+
+# Fetched sources (default --dest when no deploy.env exists) and local scratch
+/src/
+*.dump
+*.sql.gz
+*.log
+.DS_Store
