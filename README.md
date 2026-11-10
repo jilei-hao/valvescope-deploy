@@ -221,45 +221,37 @@ part ran against a throwaway PostgreSQL 18 cluster — the server has 16).
 | `scripts/health.sh` | partial: unit, port, disk and GPU checks; DB and login checks to do |
 | `install/install.sh`, full `backup.sh`, `rollback.sh` | stubs with their step lists |
 
-### What upstream must change for R1 to hold over time
+### Upstream state for R1 (never wipe data)
 
-`db-init.sh` is safe today because it refuses rather than guesses. These are the
-gaps in `avrp-gateway` (at the pinned SHA `3b8e4b2`) that it has to work around:
+`db-init.sh` is safe because it refuses rather than guesses. The gaps it had to
+work around in `avrp-gateway`, and where each stands (2026-11-10):
 
-1. **Schema and seed data are edited in place.** `sql/schemas.sql` and
-   `sql/seed.sql` are only read when a database is created. Upstream has changed
-   `seed.sql` without a matching migration (commit `20f2e3e` added the
-   `phase-detection` and `auto-segmentation` module rows and renumbered the
-   others; there is no migration 006). A server created before such a change
-   would never receive it. `db-init.sh` detects this and stops; the real fix is
-   the rule *every change to schema or reference data ships as a migration*.
-   This is the one true blocker: it does not affect the first install, it
-   affects the first upgrade that touches reference data.
-2. **The blob-metadata database has no migrations directory at all**
-   (`data/db_adapters/sql/` has only `schemas.sql`, `seed.sql`, `functions/`).
-   Any change to that schema has no forward path.
-3. **Migrations carry their own `begin`/`commit`**, so a migration and the record
-   that it ran cannot be one transaction. Safe only because all five say they can
-   be re-run; nothing enforces that for a sixth.
-4. **No migration tracking upstream.** The gateway's own scripts re-run every
-   migration on every reset. The tracking table here is ours, so a database
-   created by the gateway's scripts looks foreign to `db-init.sh` (`--adopt`).
-5. **Functions are fine:** all 30 + 11 files are `CREATE OR REPLACE`, and the
-   three that change a return type drop the old function first. Migration 003
-   must run before the functions, which `db-init.sh` does.
-6. **The blob-metadata seed inserts two fixed login tokens** (`admin`/`admin` and
-   a `gateway` token committed in git). Applied as-is at creation; whether those
-   rows are still used after the dataserver merge needs an upstream answer.
-7. **Hard-coded role.** `sql/create_user.sql` grants to `avrpdev`. Not used here:
-   the deploy role creates and owns everything.
-8. **`reset-db.sh` and friends drop the database.** Never called from here; the
-   lint forbids it.
+| # | Gap | State |
+|---|---|---|
+| 1 | Schema and seed data edited in place, with no migration. Two cases existed: `20f2e3e` (two modules added to `seed.sql`) and `65197bd` (a column widened in `schemas.sql`). | **Fixed upstream, not yet pinned** — branch `fix/forward-only-migrations` (`8f6bac8`) adds migrations 006 and 007, a written rule (`sql/migrations/README.md`) and `scripts/check-migrations.sh`. Verified: a pre-change database migrated forward equals a fresh one in schema, reference rows and row counts. |
+| 2 | The blob-metadata database had no migrations directory. | **Fixed on the same branch** — `data/db_adapters/sql/migrations/` exists (empty; the schema has not changed since the merge) and the check script covers it. `db-init.sh` does not read it yet: **to do** when the pin moves. |
+| 3 | Migrations carry their own `begin`/`commit`, so a migration and the record that it ran are not one transaction. | Open. Safe while every migration is idempotent, which the upstream rule now requires. |
+| 4 | No migration tracking upstream; the tracking table here is ours, so a database made by the gateway's own scripts needs `--adopt`. | Open, by design. |
+| 5 | Functions. | Fine: all files are `create or replace`; signature changes drop the old function in a migration. |
+| 6 | The blob-metadata seed inserts two fixed login tokens. | Open: needs an upstream answer on whether they are still used. |
+| 7 | `sql/create_user.sql` grants to a hard-coded `avrpdev`. | Not used here. |
+| 8 | `reset-db.sh` and friends drop the database. | Never called from here; the lint forbids it. |
+
+Until `versions.lock` pins a gateway commit that contains `8f6bac8`, an existing
+database would stop at the baseline check on its first upgrade (gap 1). A first
+install is unaffected.
 
 Other open design points:
 
-1. **Proxy paths.** `/api` and `/viewer` are a proposal. The web viewer builds
-   its gateway address as `http://HOST:PORT` with no path, and has no base path,
-   so it needs an upstream change before it works behind this layout.
+1. **Proxy paths** (`/api`, `/viewer/`). **Fixed upstream, not yet pinned.** The
+   viewer takes a gateway address with a path and a base path
+   (`avrp-view-service` branch `feature/gateway-url-and-base-path`, `611ecd2`;
+   browser-verified behind a one-origin test server). The manager's "Open Viewer"
+   link is configurable and its production build works for the first time
+   (`avrp-manager` branch `fix/viewer-url-configurable`, `337b434`) — before
+   that commit `next build` fails, so the manager cannot be installed from the
+   current pin. The templates here already emit the new settings; the Caddyfile
+   has not been run yet.
 2. **Gateway deploy fixes** (a `start` script, undeclared `node-fetch` /
    `form-data`, blob-store settings validated at boot) land in `avrp-gateway`
    and then the pin moves.

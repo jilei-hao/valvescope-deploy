@@ -5,10 +5,10 @@
 #   /viewer/*  -> web viewer static files (prefix stripped)
 #   /*         -> manager
 #
-# OPEN (WS-3): the path layout is a proposal. The gateway's own routes live at the
-# root (/login, /data, ...) and /login collides with the manager's page, hence the
-# /api prefix. The viewer needs upstream support for a base path and a gateway
-# address with a path before /viewer/ and /api work for it.
+# The gateway's own routes live at the root (/login, /data, ...) and /login
+# collides with the manager's page, hence the /api prefix. The viewer is built
+# with VITE_BASE_PATH=/viewer/ and VITE_GATEWAY_URL=/api, the manager with
+# NEXT_PUBLIC_GATEWAY_URL=<origin>/api (see config/templates/).
 {
 	auto_https off
 	admin off
@@ -24,7 +24,14 @@ http://@VS_HOST@:@VS_PUBLIC_PORT@ {
 		reverse_proxy 127.0.0.1:@VS_GATEWAY_PORT@
 	}
 
+	redir /viewer /viewer/
+
 	handle_path /viewer/* {
+		# The viewer is a single-page app: /viewer/app and /viewer/model-view/<id>
+		# are routes inside it, not files. Anything that is not a built asset gets
+		# index.html and the app's own router takes it from there.
+		@route not path /assets/* *.js *.css *.svg *.png *.ico *.json *.wasm *.map
+		rewrite @route /index.html
 		reverse_proxy 127.0.0.1:@VS_VIEWER_PORT@
 	}
 
