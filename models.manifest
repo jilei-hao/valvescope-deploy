@@ -37,9 +37,11 @@
 # model, tells you to put it in place by hand, verifies it in full, restarts the
 # units in the restart column and records it in $VS_STATE_DIR/deployed.models.
 #
-# The three lines below are PLACEHOLDERS: UNMEASURED means nobody has taken the
-# checksums yet. They can only be taken on the lab box, where the weights are.
+# The three models below were measured on Ludwig on 2026-11-11 from
+# /home/jileihao/data/spt/{ct,tee}-model/models (files dated 2026-07-19). They have
+# no upstream version label, so the version column records the capture date.
+# A model listed as UNMEASURED has no file list yet: only its directory is checked.
 
-ct-loocv-f0       VS_CT_MODELS_DIR   Dataset900_LOOCV_f0             unversioned  UNMEASURED  valvescope-handler
-tee-final         VS_TEE_MODELS_DIR  Dataset2222_FinalAVData         unversioned  UNMEASURED  valvescope-handler
-tee-final-2chan   VS_TEE_MODELS_DIR  Dataset3333_FinalAVData_2Chan   unversioned  UNMEASURED  valvescope-handler
+ct-loocv-f0  VS_CT_MODELS_DIR  Dataset900_LOOCV_f0  captured-2026-11-11  5965f5a5028c1af8147fb40ecfd04e25664d22519c8b6133bb0967e6b2bdf5ef  valvescope-handler
+tee-final  VS_TEE_MODELS_DIR  Dataset2222_FinalAVData  captured-2026-11-11  71c88b04562620d4ef821775441078bf93756bec3517158ad9bec127740a250e  valvescope-handler
+tee-final-2chan  VS_TEE_MODELS_DIR  Dataset3333_FinalAVData_2Chan  captured-2026-11-11  9e81e137aca72ac6bc582adaa9a19f38dabd70f30570c11f899e5d29c32bb437  valvescope-handler

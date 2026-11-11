@@ -280,7 +280,14 @@ out="$(plan --lock "$T/b/versions.lock" --map "$T/b/components.bad" --envs "$T/b
 [ $rc -ne 0 ] && has "$out" "conda environment 'nosuchenv'" && ok "component naming an unknown environment: refused, names it" || fail "unknown environment refused" "$out"
 
 echo "== Part 6: model manifest"
-[ "$(awk '$1 !~ /^#/ && NF == 6 && $5 == "UNMEASURED"' "$REPO/models.manifest" | wc -l | tr -d ' ')" = "3" ] && ok "manifest seeds the three known models as UNMEASURED" || fail "three UNMEASURED placeholders"
+bad=""; n=0
+while read -r name location subdir version checksum restart; do
+  case "$name" in ''|\#*) continue ;; esac
+  n=$((n + 1))
+  [ "$checksum" = "UNMEASURED" ] && continue
+  [ -f "$REPO/models/$name.files" ] && [ "$(shasum -a 256 < "$REPO/models/$name.files" | cut -d' ' -f1)" = "$checksum" ] || bad="$bad $name"
+done < "$REPO/models.manifest"
+[ "$n" -ge 3 ] && [ -z "$bad" ] && ok "every measured model's file list matches its checksum in the manifest ($n models)" || fail "manifest and models/*.files disagree" "$bad"
 for d in Dataset900_LOOCV_f0 Dataset2222_FinalAVData Dataset3333_FinalAVData_2Chan; do
   grep -q "$d" "$REPO/models.manifest" || fail "manifest names $d"
 done
