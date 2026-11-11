@@ -292,7 +292,9 @@ for d in Dataset900_LOOCV_f0 Dataset2222_FinalAVData Dataset3333_FinalAVData_2Ch
   grep -q "$d" "$REPO/models.manifest" || fail "manifest names $d"
 done
 out="$(plan)"; expect "deployed models match the manifest: nothing to do" "$out" 'nothing to do'
-out="$("$REPO/scripts/upgrade.sh" --plan --deployed "$T/absent" --only model:ct-loocv-f0 2>&1)"
+# a model nobody has measured yet (a new line in the manifest before model-manifest.sh ran)
+awk '$1 == "ct-loocv-f0" { $5 = "UNMEASURED" } { print }' "$REPO/models.manifest" > "$T/manifest.unmeasured"
+out="$("$REPO/scripts/upgrade.sh" --plan --deployed "$T/absent" --manifest "$T/manifest.unmeasured" --only model:ct-loocv-f0 2>&1)"
 expect "unmeasured model on a fresh server: planned, marked UNMEASURED" "$out" "model 'ct-loocv-f0' is UNMEASURED"
 
 # a small fake model with the shape of an nnU-Net directory
