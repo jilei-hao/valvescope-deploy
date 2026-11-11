@@ -1,0 +1,10 @@
+name: segflow4d
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.10
+  - cuda-cudart-dev=12.1
+  - cuda-libraries-dev=12.1
+  - cuda-nvcc=12.1
+prefix: /home/jileihao/tk/miniconda3/envs/segflow4d

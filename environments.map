@@ -25,9 +25,9 @@
 #   - env-file named here but not in the repository yet: the environment is taken
 #     as already existing and is not managed. upgrade.sh says so in every plan.
 #
-# NOTE handler: envs/handler.yml does not exist yet. It has to be exported from the
-# working environment on the lab box (WS-2). Until then the worker environment must
-# be created by hand.
+# handler: envs/handler.yml was captured on Ludwig (2026-11-11) and proven to rebuild
+# there; see envs/README.md. fireants, segflow4d and avrp-handler are not in it —
+# they are pinned components installed into the environment (components.map).
 
 handler  $VS_HANDLER_ENV  envs/handler.yml                   valvescope-handler
 autoseg  $VS_AUTOSEG_ENV  src:avrp-auto-seg/environment.yml  -

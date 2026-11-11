@@ -1,0 +1,199 @@
+# envs/handler.yml — the worker's conda environment (environments.map: handler).
+#
+# Captured 2026-11-11 on Ludwig from the working developer environment `segflow4d`
+# (conda 25.1.1, Python 3.10.19, torch 2.5.1+cu121). The raw captures are kept next
+# to this file in envs/handler.export/ — this file is assembled from them, because
+# neither `conda env export` form rebuilds on its own:
+#   - the full export's pip section silently DROPS packages (vtk, itk-*, nibabel,
+#     scikit-image, matplotlib, picsl-* were missing); `pip freeze` is the truth;
+#   - it lists three things no index can serve: `fireants` (installed from a local
+#     clone), `fireants-fused-ops` (a CUDA extension compiled on the box) and
+#     `segflow4d` (an editable checkout);
+#   - torch +cu121 wheels live on download.pytorch.org, not PyPI;
+#   - --from-history holds only python and the three CUDA toolkit packages.
+#
+# So this file carries: the conda packages with their exact builds (python, and the
+# CUDA 12.1 compiler + headers that the fused-ops build needs), and every pip
+# package at its exact version. NOT in this file, installed afterwards as pinned
+# components (versions.lock / components.map), always with --no-deps so nothing
+# here can drift:
+#   FireANTs     fireants 1.4.0 + fireants_fused_ops 1.2.0, built by install/build-fireants.sh
+#   segflow4d    pip install --no-deps -e
+#   avrp-handler pip install --no-deps -e   (ipython and watchdog below are its
+#                declared dependencies; the developer environment never had them
+#                because the handler was not pip-installed there)
+#
+# Changing this file is an upgrade: scripts/upgrade.sh rebuilds the environment.
+name: segflow4d
+channels:
+  - nvidia
+  - defaults
+dependencies:
+  - _libgcc_mutex=0.1=main
+  - _openmp_mutex=5.1=1_gnu
+  - bzip2=1.0.8=h5eee18b_6
+  - ca-certificates=2025.12.2=h06a4308_0
+  - cuda-cccl=13.1.115=hf678805_0
+  - cuda-cccl_linux-64=13.1.115=0
+  - cuda-crt-dev_linux-64=13.1.115=0
+  - cuda-cudart=13.1.80=h6205011_0
+  - cuda-cudart-dev=12.1.105=0
+  - cuda-cudart-dev_linux-64=13.1.80=hbe36340_0
+  - cuda-cudart-static_linux-64=13.1.80=hbe36340_0
+  - cuda-cudart_linux-64=13.1.80=h61a3acf_0
+  - cuda-driver-dev=13.1.80=h3b4bcfc_0
+  - cuda-driver-dev_linux-64=13.1.80=hbe36340_0
+  - cuda-libraries-dev=12.1.1=0
+  - cuda-nvcc=12.1.105=0
+  - cuda-nvrtc=13.1.115=he32a221_0
+  - cuda-nvrtc-dev=13.1.115=he32a221_0
+  - cuda-opencl=13.1.115=h4f1e1d6_0
+  - cuda-opencl-dev=13.1.115=h4f1e1d6_0
+  - cuda-profiler-api=13.1.115=hf678805_0
+  - cuda-version=13.1=hd92462c_3
+  - expat=2.7.4=h7354ed3_0
+  - ld_impl_linux-64=2.44=h153f514_2
+  - libcublas=13.2.1.1=h0bdde2c_0
+  - libcublas-dev=13.2.1.1=h0bdde2c_0
+  - libcufft=12.1.0.78=h6fb6d45_0
+  - libcufft-dev=12.1.0.78=h6fb6d45_0
+  - libcufile=1.16.1.26=h3b4bcfc_0
+  - libcufile-dev=1.16.1.26=h2e6a4e3_0
+  - libcurand=10.4.1.81=h1b6c897_0
+  - libcurand-dev=10.4.1.81=h1b6c897_0
+  - libcusolver=12.0.9.81=hfcec1d2_0
+  - libcusolver-dev=12.0.9.81=hfcec1d2_0
+  - libcusparse=12.7.3.1=h693dda1_0
+  - libcusparse-dev=12.7.3.1=h693dda1_0
+  - libexpat=2.7.4=h7354ed3_0
+  - libffi=3.4.4=h6a678d5_1
+  - libgcc=15.2.0=h69a1729_7
+  - libgcc-ng=15.2.0=h166f726_7
+  - libgomp=15.2.0=h4751f2c_7
+  - libnpp=13.0.3.3=hcc83568_0
+  - libnpp-dev=13.0.3.3=hcc83568_0
+  - libnsl=2.0.0=h5eee18b_0
+  - libnvjitlink=13.1.115=he32a221_0
+  - libnvjitlink-dev=13.1.115=he32a221_0
+  - libnvjpeg=13.0.3.75=h06761be_0
+  - libnvjpeg-dev=13.0.3.75=h0b38513_0
+  - libstdcxx=15.2.0=h39759b7_7
+  - libstdcxx-ng=15.2.0=hc03a8fd_7
+  - libuuid=1.41.5=h5eee18b_0
+  - libxcb=1.17.0=h9b100fa_0
+  - libzlib=1.3.1=hb25bd0a_0
+  - ncurses=6.5=h7934f7d_0
+  - ocl-icd=2.3.3=h47b2149_0
+  - opencl-headers=2025.07.22=hfb20e49_0
+  - openssl=3.0.19=h1b28b03_0
+  - packaging=25.0=py310h06a4308_1
+  - pip=26.0.1=pyhc872135_0
+  - pthread-stubs=0.3=h0ce48e5_1
+  - python=3.10.19=h6fa692b_0
+  - readline=8.3=hc2a1206_0
+  - setuptools=80.10.2=py310h06a4308_0
+  - sqlite=3.51.1=he0a8d7e_0
+  - tk=8.6.15=h54e0aa7_0
+  - wheel=0.46.3=py310h06a4308_0
+  - xorg-libx11=1.8.12=h9b100fa_1
+  - xorg-libxau=1.0.12=h9b100fa_0
+  - xorg-libxdmcp=1.1.5=h9b100fa_0
+  - xorg-xorgproto=2024.1=h5eee18b_1
+  - xz=5.6.4=h5eee18b_1
+  - zlib=1.3.1=hb25bd0a_0
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu121
+      - antlr4-python3-runtime==4.9.3
+      - certifi==2026.6.17
+      - charset-normalizer==3.4.9
+      - contourpy==1.3.0
+      - cycler==0.12.1
+      - exceptiongroup==1.3.1
+      - filelock==3.20.0
+      - fonttools==4.53.1
+      - fsspec==2025.12.0
+      - hydra-core==1.3.2
+      - idna==3.18
+      - imageio==2.35.1
+      - iniconfig==2.3.0
+      - itk==5.4.0
+      - itk-core==5.4.0
+      - itk-filtering==5.4.0
+      - itk-io==5.4.0
+      - itk-numerics==5.4.0
+      - itk-registration==5.4.0
+      - itk-segmentation==5.4.0
+      - Jinja2==3.1.6
+      - joblib==1.4.2
+      - kiwisolver==1.4.5
+      - lazy_loader==0.4
+      - MarkupSafe==3.0.2
+      - matplotlib==3.9.2
+      - MedPy==0.5.2
+      - mpmath==1.3.0
+      - networkx==3.3
+      - nibabel==5.2.1
+      - numpy==2.2.6
+      - nvidia-cublas-cu12==12.1.3.1
+      - nvidia-cuda-cupti-cu12==12.1.105
+      - nvidia-cuda-nvrtc-cu12==12.1.105
+      - nvidia-cuda-runtime-cu12==12.1.105
+      - nvidia-cudnn-cu12==9.1.0.70
+      - nvidia-cufft-cu12==11.0.2.54
+      - nvidia-curand-cu12==10.3.2.106
+      - nvidia-cusolver-cu12==11.4.5.107
+      - nvidia-cusparse-cu12==12.1.0.106
+      - nvidia-ml-py3==7.352.0
+      - nvidia-nccl-cu12==2.21.5
+      - nvidia-nvjitlink-cu12==12.9.86
+      - nvidia-nvtx-cu12==12.1.105
+      - omegaconf==2.3.0
+      - pandas==2.3.3
+      - picsl_c3d==1.4.2.2
+      - picsl_greedy==0.0.5
+      - pillow==12.0.0
+      - pluggy==1.6.0
+      - Pygments==2.19.2
+      - pyparsing==3.3.2
+      - pytest==9.0.2
+      - python-dateutil==2.9.0.post0
+      - python-dotenv==1.2.2
+      - pytz==2025.2
+      - PyYAML==6.0.3
+      - requests==2.34.2
+      - scikit-image==0.24.0
+      - scikit-learn==1.7.2
+      - scipy==1.15.3
+      - SimpleITK==2.2.1
+      - six==1.17.0
+      - sympy==1.13.1
+      - threadpoolctl==3.5.0
+      - tifffile==2024.8.30
+      - tomli==2.4.0
+      - torch==2.5.1+cu121
+      - torchvision==0.20.1+cu121
+      - tqdm==4.67.3
+      - triton==3.1.0
+      - typing==3.7.4.3
+      - typing_extensions==4.15.0
+      - tzdata==2025.3
+      - urllib3==2.7.0
+      - vtk==9.3.1
+      # Not in the developer environment: ipython and watchdog are declared by
+      # avrp-handler's setup.py (the handler was never pip-installed there), with
+      # what they pull in. Resolved on Ludwig 2026-11-11; `pip check` passes with them.
+      - asttokens==3.0.2
+      - decorator==5.3.1
+      - executing==2.3.0
+      - ipython==8.39.0
+      - jedi==0.20.1
+      - matplotlib-inline==0.2.2
+      - parso==0.8.7
+      - pexpect==4.9.0
+      - prompt_toolkit==3.0.53
+      - ptyprocess==0.7.0
+      - pure_eval==0.2.4
+      - stack-data==0.6.3
+      - traitlets==5.16.1
+      - watchdog==6.0.0
+      - wcwidth==0.9.4
