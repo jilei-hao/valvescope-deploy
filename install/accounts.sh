@@ -42,7 +42,9 @@ if [ "$LIST" -eq 1 ]; then
   exit 0
 fi
 
-valid_name() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{1,49}$'; }
+# Lower case only: the web viewer's login form lower-cases what is typed, so an
+# account with a capital letter in its name could never log in there.
+valid_name() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9._-]{1,49}$'; }
 ACCOUNTS_FILE="$REPO_DIR/config/accounts.txt"
 WANT="$(mktemp "${TMPDIR:-/tmp}/vs-accounts.XXXXXX")"
 trap 'rm -f "$WANT"' EXIT
@@ -71,7 +73,7 @@ if [ -f "$ACCOUNTS_FILE" ]; then
   [ "$filled" -eq 0 ] || echo "accounts: generated $filled initial password(s) in $ACCOUNTS_FILE"
   while read -r name pw extra; do
     case "$name" in ''|\#*) continue ;; esac
-    valid_name "$name" || die "$ACCOUNTS_FILE: '$name' is not a usable account name (letters, digits, . _ -)"
+    valid_name "$name" || die "$ACCOUNTS_FILE: '$name' is not a usable account name (lower-case letters, digits, . _ -)"
     [ "$name" != "$VS_WORKER_USER" ] || die "$ACCOUNTS_FILE: '$name' is the worker's account; people need their own"
     printf '%s\t%s\t%s\n' "$name" user "$pw" >> "$WANT"
   done < "$ACCOUNTS_FILE"

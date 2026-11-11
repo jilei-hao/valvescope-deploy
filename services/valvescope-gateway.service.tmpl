@@ -12,6 +12,11 @@ WorkingDirectory=@VS_SRC_DIR@/avrp-gateway
 # The gateway reads .env from its working directory. `node app.js`, never
 # `npm run dev` (nodemon is not a dependency).
 Environment=NODE_ENV=production
+# The gateway listens on every interface (app.listen(port), no host setting
+# upstream). Only the proxy and the worker should reach it, both on this machine,
+# so its network traffic is limited to loopback here. Postgres is on loopback too.
+IPAddressDeny=any
+IPAddressAllow=localhost
 ExecStart=@VS_NODE_BIN@ app.js
 Restart=on-failure
 RestartSec=5

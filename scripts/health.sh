@@ -51,6 +51,12 @@ c="$(http_code "$PUB/viewer/")"
 c="$(http_code "$PUB/api/case_studies")"
 [ "$c" = "401" ] && ok "proxy reaches the gateway at $PUB/api/ (401 without a token, as it should)" || bad "proxy reaches the gateway at $PUB/api/ (expected 401 without a token, got http $c)"
 
+# The gateway binds every interface; its unit confines it to loopback. If it answers
+# on the LAN address, that confinement is not in effect and it is exposed without the proxy.
+c="$(http_code --max-time 4 "http://$VS_HOST:$VS_GATEWAY_PORT/case_studies")"
+[ "$c" = "000" ] && ok "gateway is not reachable on the LAN address ($VS_HOST:$VS_GATEWAY_PORT refuses; loopback only)" \
+  || bad "gateway answers on $VS_HOST:$VS_GATEWAY_PORT (http $c) — it must only be reachable through the proxy"
+
 # --- databases ----------------------------------------------------------------------
 for db in "$VS_DB_NAME" "$VS_DS_DB_NAME"; do
   if PGPASSWORD="$VS_DB_PASSWORD" psql -X -At -h "$VS_PG_HOST" -p "$VS_PG_PORT" -U "$VS_DB_USER" -d "$db" -c 'select 1' >/dev/null 2>&1; then
