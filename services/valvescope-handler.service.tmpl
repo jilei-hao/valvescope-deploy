@@ -12,6 +12,8 @@ Group=@VS_USER@
 WorkingDirectory=@VS_SRC_DIR@/avrp-handler
 # Always `python -m src.main` under the handler env. Never the bare
 # `avrp-handler` command: it can resolve to a stale editable install.
+# Unbuffered, so the worker's log lines reach the journal as they are written.
+Environment=PYTHONUNBUFFERED=1
 ExecStart=@VS_HANDLER_PYTHON@ -m src.main
 Restart=on-failure
 RestartSec=10
