@@ -11,7 +11,11 @@
 #              conda-update:<env>   conda env update from the component's own
 #                                   environment.yml (which ends in "-e .", so it
 #                                   reinstalls the package too)
+#              fireants:<env>       install/build-fireants.sh: FireANTs and its compiled
+#                                   CUDA extension, from the checkout, into that env
 #              -                    nothing
+#            pip-e installs with --no-deps and then runs `pip check`: the environment
+#            file pins every dependency, a component may not pull in its own.
 #            <env> is a name from environments.map (today: handler, autoseg).
 #   build    next-build | vite-build | -      (config is baked in at build, so the
 #            service .env is re-rendered first)
@@ -30,6 +34,9 @@
 #                      the handler records, so they need no line of their own.
 #   segflow4d          Imported IN-PROCESS by the handler (task_manager.py,
 #                      study_generator_worker.py) from the worker env. Nothing else loads it.
+#   FireANTs           Third-party registration library, imported by segflow4d inside the
+#                      worker. Its fused CUDA ops are compiled on the server against
+#                      the worker env's torch (no wheel exists).
 #   avrp-auto-seg      Its own conda env. The handler never imports it; it starts the
 #                      `avrp-auto-seg` program by full path for each task
 #                      (helpers/auto_seg_helpers.py). A new version is picked up by the
@@ -49,6 +56,7 @@
 
 avrp-gateway           npm-ci                -           yes  valvescope-gateway
 avrp-handler           pip-e:handler         -           -    valvescope-handler
+FireANTs               fireants:handler      -           -    valvescope-handler
 segflow4d              pip-e:handler         -           -    valvescope-handler
 avrp-auto-seg          conda-update:autoseg  -           -    -
 avrp-manager           npm-ci                next-build  -    valvescope-manager
