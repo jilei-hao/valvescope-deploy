@@ -19,7 +19,9 @@
 #
 # What it manages
 #   main      $VS_DB_NAME      from <gateway>/sql/                  schemas.sql, seed.sql, migrations/, functions/
-#   blobmeta  $VS_DS_DB_NAME   from <gateway>/data/db_adapters/sql/ schemas.sql, seed.sql, functions/
+#   blobmeta  $VS_DS_DB_NAME   from <gateway>/data/db_adapters/sql/ schemas.sql, seed.sql, migrations/, functions/
+#   Both follow the same rules. A migrations/ directory may be absent or hold no .sql
+#   file (blobmeta today: only a README); other files in it are ignored.
 #
 # Rules (this is requirement R1 — deploying never wipes data)
 #   1. The role and each database are created only if missing.

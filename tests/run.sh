@@ -19,6 +19,12 @@
 #                                so it cannot reach avrpdb / avrpdsdb.
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# Debian/Ubuntu keep initdb and pg_ctl out of PATH; use the newest installed version.
+if ! command -v initdb >/dev/null 2>&1; then
+  for d in $(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V -r); do
+    [ -x "$d/initdb" ] && { PATH="$d:$PATH"; break; }
+  done
+fi
 T="$(mktemp -d "${TMPDIR:-/tmp}/vs-test.XXXXXX")"
 PGDATA_T=""
 cleanup() {
@@ -140,14 +146,16 @@ if [ -n "$GW" ]; then
     done
   } > "$T/state.current"
   dbplan() { "$REPO/install/db-init.sh" --plan --gateway-dir "$GW" "$@" 2>&1; }
+  NMIG="$(ls "$GW/sql/migrations" | grep -c '\.sql$')"
+  LASTMIG="$(ls "$GW/sql/migrations" | grep '\.sql$' | LC_ALL=C sort | tail -1)"
 
   out="$(dbplan --state-from "$T/state.current")"; rc=$?
   [ $rc -eq 0 ] && ok "existing, current database: exit 0" || fail "existing, current database: exit 0" "$out"
   expect     "existing, current database: nothing to do" "$out" 'nothing to do'
 
-  grep -v 'migration:005' "$T/state.current" > "$T/state.behind"
+  grep -v "migration:$LASTMIG" "$T/state.current" > "$T/state.behind"
   out="$(dbplan --state-from "$T/state.behind")"
-  expect     "existing database one migration behind: applies 005" "$out" 'apply-migration +005_root_diameter.sql'
+  expect     "existing database one migration behind: applies $LASTMIG" "$out" "apply-migration +$LASTMIG"
   expect_not "existing database: no create step"   "$out" '(create-role|create-database)'
   expect_not "existing database: no schema or seed step" "$out" '(apply-schema|schemas\.sql|seed\.sql)'
   [ "$(printf '%s\n' "$out" | grep -c 'apply-migration')" = "1" ] && ok "existing database: only the one missing migration" || fail "only the one missing migration" "$out"
@@ -157,7 +165,7 @@ if [ -n "$GW" ]; then
   expect "fresh server: creates the role"            "$out" 'create-role'
   [ "$(printf '%s\n' "$out" | grep -c 'create-database')" = "2" ] && ok "fresh server: creates both databases" || fail "fresh server: creates both databases" "$out"
   [ "$(printf '%s\n' "$out" | grep -c 'apply-schema')" = "2" ]    && ok "fresh server: schema applied to both" || fail "fresh server: schema applied to both" "$out"
-  [ "$(printf '%s\n' "$out" | grep -c 'apply-migration')" = "5" ] && ok "fresh server: all 5 gateway migrations" || fail "fresh server: all 5 gateway migrations" "$out"
+  [ "$(printf '%s\n' "$out" | grep -c 'apply-migration')" = "$NMIG" ] && ok "fresh server: all $NMIG gateway migrations" || fail "fresh server: all $NMIG gateway migrations" "$out"
 
   printf 'role yes\ndb vsdb populated\ntracking vsdb no\n' > "$T/state.foreign"
   out="$(dbplan --state-from "$T/state.foreign")"; rc=$?
@@ -168,9 +176,23 @@ if [ -n "$GW" ]; then
   [ $rc -ne 0 ] && has "$out" 'seed.sql changed' && ok "seed.sql edited in place upstream: stops" || fail "seed.sql edited in place: stops" "$out"
 
   cp -R "$GW" "$T/gw-bad"; rm -rf "$T/gw-bad/.git"
-  printf 'begin;\ndrop table study;\ncommit;\n' > "$T/gw-bad/sql/migrations/006_bad.sql"
+  printf 'begin;\ndrop table study;\ncommit;\n' > "$T/gw-bad/sql/migrations/901_bad.sql"
   out="$("$REPO/install/db-init.sh" --plan --gateway-dir "$T/gw-bad" --state-from "$T/state.current" 2>&1)"; rc=$?
   [ $rc -ne 0 ] && has "$out" 'removes whole tables' && ok "pending migration that drops a table: refused on a database with data" || fail "destructive migration refused" "$out"
+
+  # the blob-metadata database has its own migrations directory (empty upstream today)
+  cp -R "$GW" "$T/gw-blob"; rm -rf "$T/gw-blob/.git"
+  mkdir -p "$T/gw-blob/data/db_adapters/sql/migrations"
+  printf 'notes, not a migration\n' > "$T/gw-blob/data/db_adapters/sql/migrations/README.md"
+  out="$("$REPO/install/db-init.sh" --plan --gateway-dir "$T/gw-blob" --state-from "$T/state.current" 2>&1)"
+  expect "blob metadata: a migrations directory with no .sql file is nothing to do" "$out" 'nothing to do'
+  printf 'begin;\nalter table files add column if not exists vs_test_col int;\ncommit;\n' > "$T/gw-blob/data/db_adapters/sql/migrations/900_test.sql"
+  out="$("$REPO/install/db-init.sh" --plan --gateway-dir "$T/gw-blob" --state-from "$T/state.current" 2>&1)"
+  expect "blob metadata: a pending migration is planned against the blob database" "$out" 'blobmeta \(vsdsdb\) +apply-migration +900_test.sql'
+  [ "$(printf '%s\n' "$out" | grep -c 'apply-')" = "1" ] && ok "blob metadata: and nothing else is planned" || fail "blob migration: nothing else planned" "$out"
+  printf 'begin;\ntruncate files;\ncommit;\n' > "$T/gw-blob/data/db_adapters/sql/migrations/901_bad.sql"
+  out="$("$REPO/install/db-init.sh" --plan --gateway-dir "$T/gw-blob" --state-from "$T/state.current" 2>&1)"; rc=$?
+  [ $rc -ne 0 ] && has "$out" "'vsdsdb': pending migration 901_bad.sql removes whole tables" && ok "blob metadata: table-emptying migration refused" || fail "blob destructive migration refused" "$out"
 
   VS_DEPLOY_ENV="$T/devnames.env"; sed 's/^VS_DB_NAME=.*/VS_DB_NAME=avrpdb/' "$REPO/config/deploy.env.example" > "$VS_DEPLOY_ENV"
   out="$(VS_DEPLOY_ENV="$VS_DEPLOY_ENV" "$REPO/install/db-init.sh" --plan --gateway-dir "$GW" --state-from "$T/state.fresh" 2>&1)"; rc=$?
@@ -331,7 +353,7 @@ else
   while nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; do PORT=$((PORT + 1)); done
   PGDATA_T="$T/pg"
   if ! LC_ALL=C initdb -D "$PGDATA_T" -U vs_test_admin -A trust -E UTF8 --locale=C >"$T/initdb.log" 2>&1 \
-     || ! LC_ALL=C pg_ctl -D "$PGDATA_T" -o "-p $PORT -c listen_addresses=127.0.0.1 -k $T" -l "$T/pg.log" -w start >/dev/null 2>&1; then
+     || ! LC_ALL=C pg_ctl -D "$PGDATA_T" -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories=" -l "$T/pg.log" -w start >/dev/null 2>&1; then
     PGDATA_T=""
     fail "start a throwaway Postgres cluster" "$(tail -5 "$T/initdb.log" "$T/pg.log" 2>/dev/null)"
   else
@@ -350,7 +372,7 @@ else
     [ $rc -eq 0 ] && ok "first run on an empty cluster succeeds" || fail "first run on an empty cluster succeeds" "$out"
     [ "$(q vs_test_main "select count(*) from pg_tables where schemaname='public'")" -gt 15 ] && ok "main database has its tables" || fail "main database has its tables"
     [ "$(q vs_test_main "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'")" -ge 30 ] && ok "main database has its functions" || fail "main database has its functions"
-    [ "$(q vs_test_main "select count(*) from vs_schema_migrations where key like 'migration:%'")" = "5" ] && ok "5 migrations recorded" || fail "5 migrations recorded"
+    [ "$(q vs_test_main "select count(*) from vs_schema_migrations where key like 'migration:%'")" = "$NMIG" ] && ok "$NMIG migrations recorded" || fail "$NMIG migrations recorded"
     [ "$(q vs_test_main "select count(*) from information_schema.columns where table_name='study_module_status' and column_name='lease_expires_at'")" = "1" ] && ok "migration 001 really applied (lease column present)" || fail "migration 001 applied"
     [ "$(q vs_test_blob "select count(*) from folders")" = "1" ] && ok "blob-metadata database seeded (root folder)" || fail "blob-metadata database seeded"
     [ "$(q vs_test_main "select tableowner from pg_tables where tablename='study'")" = "vs_test_role" ] && ok "objects are owned by the deploy role" || fail "objects owned by deploy role"
@@ -371,10 +393,10 @@ else
 
     # a later release: one new forward migration and one changed function
     cp -R "$GW" "$T/gw-next"; rm -rf "$T/gw-next/.git"
-    printf 'begin;\nalter table study add column if not exists vs_test_col int;\ncommit;\n' > "$T/gw-next/sql/migrations/006_test.sql"
+    printf 'begin;\nalter table study add column if not exists vs_test_col int;\ncommit;\n' > "$T/gw-next/sql/migrations/900_test.sql"
     printf '\n-- changed\n' >> "$T/gw-next/sql/functions/fn_get_user_info.sql"
     out="$(GWX="$T/gw-next" dbinit)"; rc=$?
-    [ $rc -eq 0 ] && has "$out" 'apply-migration +006_test.sql' && ok "new release: applies only the new migration" || fail "new release: applies the new migration" "$out"
+    [ $rc -eq 0 ] && has "$out" 'apply-migration +900_test.sql' && ok "new release: applies only the new migration" || fail "new release: applies the new migration" "$out"
     expect_not "new release: no schema, seed or create step" "$out" '(create-|apply-schema)'
     [ "$(printf '%s\n' "$out" | grep -c '== .*apply-migration')" = "1" ] && ok "new release: old migrations not re-run" || fail "old migrations not re-run" "$out"
     [ "$(q vs_test_main "select count(*) from information_schema.columns where table_name='study' and column_name='vs_test_col'")" = "1" ] && ok "new release: migration took effect" || fail "migration took effect"
@@ -382,11 +404,22 @@ else
     out="$(GWX="$T/gw-next" dbinit)"
     expect "new release: running it again does nothing" "$out" 'nothing to do'
 
+    # the blob-metadata database migrates the same way
+    mkdir -p "$T/gw-next/data/db_adapters/sql/migrations"
+    printf 'begin;\nalter table files add column if not exists vs_test_col int;\ncommit;\n' > "$T/gw-next/data/db_adapters/sql/migrations/900_test.sql"
+    out="$(GWX="$T/gw-next" dbinit)"; rc=$?
+    [ $rc -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c '== .*apply-migration')" = "1" ] && has "$out" '== blobmeta: apply-migration 900_test.sql' && ok "blob metadata: applies only its new migration" || fail "blob metadata migration applied" "$out"
+    [ "$(q vs_test_blob "select count(*) from information_schema.columns where table_name='files' and column_name='vs_test_col'")" = "1" ] && ok "blob metadata: migration took effect" || fail "blob migration took effect"
+    [ "$(q vs_test_blob "select count(*) from vs_schema_migrations where key = 'migration:900_test.sql'")" = "1" ] && ok "blob metadata: migration recorded in that database" || fail "blob migration recorded"
+    [ "$(q vs_test_blob "select count(*) from folders where name='vs-test-keep'")" = "1" ] && ok "blob metadata: inserted row still there" || fail "blob row kept after migration"
+    out="$(GWX="$T/gw-next" dbinit)"
+    expect "blob metadata: running it again does nothing" "$out" 'nothing to do'
+
     # guards against a database with data
-    printf 'begin;\ndrop table study cascade;\ncommit;\n' > "$T/gw-next/sql/migrations/007_bad.sql"
+    printf 'begin;\ndrop table study cascade;\ncommit;\n' > "$T/gw-next/sql/migrations/901_bad.sql"
     out="$(GWX="$T/gw-next" dbinit)"; rc=$?
     [ $rc -ne 0 ] && [ "$(q vs_test_main "select count(*) from pg_tables where tablename='study'")" = "1" ] && ok "table-dropping migration refused; table still there" || fail "table-dropping migration refused" "$out"
-    rm "$T/gw-next/sql/migrations/007_bad.sql"
+    rm "$T/gw-next/sql/migrations/901_bad.sql"
     printf '\n-- edited in place\n' >> "$T/gw-next/sql/seed.sql"
     out="$(GWX="$T/gw-next" dbinit)"; rc=$?
     [ $rc -ne 0 ] && has "$out" 'seed.sql changed' && ok "seed.sql edited in place: stops and changes nothing" || fail "seed.sql edited in place stops" "$out"
