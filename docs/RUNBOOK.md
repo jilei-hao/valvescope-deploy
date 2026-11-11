@@ -1,7 +1,7 @@
 # ValveScope runbook
 
-For whoever operates the server. **Outline only** — sections marked *(to write)*
-get filled in as each piece is built and proven on the host.
+For whoever operates the server. Sections marked *(to write)* are still outlines;
+the README's Status table says which parts have actually run on the host.
 
 ## 1. The system in one page
 - What runs where: five systemd units under `valvescope.target`; Postgres; the GPU.
@@ -15,9 +15,62 @@ get filled in as each piece is built and proven on the host.
 - Is it healthy: `scripts/health.sh`
 - Logs: `journalctl -u valvescope-handler -f` (same for the other units)
 
-## 3. First install *(to write with install.sh)*
-- Prerequisites check · create user and directories · secrets · sources ·
-  databases · conda environments · builds · units · accounts · firewall · first health check.
+## 3. First install
+
+One command, safe to repeat: `install/install.sh`. It needs a person with sudo.
+
+**Before it** (it checks these and stops with the exact command if one is missing;
+it installs none of them):
+
+```bash
+sudo apt install caddy gcc-12 g++-12
+sudo systemctl disable --now caddy.service   # Ubuntu's package starts a welcome page on port 80
+```
+
+plus a working `nvidia-smi`, Node >= 20, PostgreSQL 16 on the port in `deploy.env`,
+and a stored git credential for github.com on your own account (most pinned
+repositories are private; `git ls-remote https://github.com/jilei-hao/avrp-gateway.git`
+must work for you).
+
+**Where the repository goes.** The deploy user must be able to read it, and a home
+directory usually is not readable by others. Put it in `$VS_HOME`:
+
+```bash
+sudo install -d -o "$USER" /opt/valvescope/valvescope-deploy
+git clone https://github.com/jilei-hao/valvescope-deploy /opt/valvescope/valvescope-deploy
+cd /opt/valvescope/valvescope-deploy
+cp config/deploy.env.example config/deploy.env    # edit: VS_HOST, VS_BACKUP_DIR, VS_LAN_CIDR
+install/install.sh --check                        # prerequisites only; changes nothing
+install/install.sh
+```
+
+**Who owns what.** You own the repository and `config/deploy.env` (mode 600; the
+only place secrets are kept). The deploy user (`valvescope`) owns sources, conda,
+builds and data, and never sees `deploy.env`: it gets the rendered service files.
+
+**The steps** (`install/install.sh --from N` resumes at one):
+
+| # | Step | Notes |
+|---|---|---|
+| 1 | prerequisites, configuration | refuses the developer checkout's ports, database names and paths |
+| 2 | Unix user and directories | existing directories keep their contents |
+| 3 | secrets | only fills values still set to `CHANGE_ME` |
+| 4 | miniconda at `$VS_CONDA_ROOT` | pinned installer, checksum verified |
+| 5 | systemd units | installed and enabled; nothing started |
+| 6 | model weights | **stops here until a person has copied them** — see 5b |
+| 7 | gateway and databases | `scripts/upgrade.sh --only avrp-gateway` |
+| 8 | accounts | worker account + `config/accounts.txt` — see 7 |
+| 9 | everything else | `scripts/upgrade.sh`: conda envs (slow: ~15 GB of downloads), FireANTs compile, worker, manager and viewer builds |
+| 10 | firewall | prints the ufw rule; `--apply-firewall` applies it |
+| 11 | start and health | `scripts/health.sh` |
+
+- The lab firewall re-signs TLS for `download.pytorch.org`. `VS_CA_BUNDLE` in
+  `deploy.env` points pip at the system CA store; without it the worker
+  environment fails with `CERTIFICATE_VERIFY_FAILED`.
+- Copying the models (step 6), as a person, once:
+  `sudo cp -a <source>/Dataset900_LOOCV_f0 $VS_CT_MODELS_DIR/` (same for the two
+  TEE datasets under `$VS_TEE_MODELS_DIR`), `sudo chown -R valvescope: /srv/valvescope/models`,
+  then `scripts/verify-models.sh --full`.
 
 ## 4. Changing configuration
 - Edit `config/deploy.env` → `config/render.sh --install` → restart.
@@ -162,8 +215,24 @@ If the module needs its own model or environment, do 5b / 5c in the same change.
   `deployed.lock`; schedule, retention, where on the NAS; the restore procedure and
   the date of the last restore rehearsal.
 
-## 7. User accounts *(to write)*
-- Adding and removing a person. The worker's own account. Resetting a password.
+## 7. User accounts
+
+Accounts live in the gateway's database. `install/accounts.sh` adds the ones that
+are missing and never touches one that exists.
+
+- **A new person:** add a line with their username to `config/accounts.txt` (not
+  in git, mode 600), run `install/accounts.sh`. It generates an initial password,
+  writes it next to the name in that file, and creates the account (role `user`).
+  Hand the password over in person. `username password` on the line sets your own.
+- **Who has an account:** `install/accounts.sh --list`.
+- **The worker's account** is `VS_WORKER_USER` in `deploy.env` (role `application`).
+  It is not a person's login.
+- People see only the cases they created themselves.
+- *(Not built: changing or resetting a password, removing an account. The gateway
+  has no endpoint for either; today that is an SQL statement by the operator.)*
+- **Known gap:** the gateway's `POST /user` creates an account for anyone who can
+  reach `/api` — there is no sign-up approval. On the lab LAN that means anyone on
+  the LAN. To fix upstream in `avrp-gateway`.
 
 ## 8. Troubleshooting
 Known failure modes, each with symptom → cause → fix. Seeded from the July 2026

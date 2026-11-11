@@ -25,8 +25,9 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ENV_FILE="$REPO_DIR/config/deploy.env"
-OUT="$REPO_DIR/rendered"
+# VS_DEPLOY_ENV selects another deploy.env, as it does for every script that uses scripts/lib.sh.
+ENV_FILE="${VS_DEPLOY_ENV:-$REPO_DIR/config/deploy.env}"
+OUT="${VS_RENDER_OUT:-$REPO_DIR/rendered}"
 ALLOW_PLACEHOLDERS=0
 INSTALL=0
 
