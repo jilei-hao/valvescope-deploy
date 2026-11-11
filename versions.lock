@@ -19,11 +19,15 @@
 # Seeded 2026-11-10 from avrp-developer@main (91d7bbe) `git submodule status`.
 # No pinned commit carries a release tag yet — tagging them is a WS-2 to-do.
 # NOTE avrp-handler: this commit is on branch fix/handler-concurrency, not on main.
+# 2026-11-11: three pins moved to fix branches that are pushed but not merged to main:
+#   avrp-gateway       fix/forward-only-migrations        (migrations 006/007, forward-only rule)
+#   avrp-manager       fix/viewer-url-configurable        (first commit on which `next build` works)
+#   avrp-view-service  feature/gateway-url-and-base-path  (/viewer/ and /api behind the proxy)
 
-avrp-gateway           host    https://github.com/jilei-hao/avrp-gateway.git           -  3b8e4b27d9e546dc11817485ca7f99e300bd10bf  -
+avrp-gateway           host    https://github.com/jilei-hao/avrp-gateway.git           -  8f6bac8d19a03ae50189b085ce42d994ba3f95b8  -
 avrp-handler           host    https://github.com/jilei-hao/avrp-handler.git           -  c2bda4a9b8a96e2ff7ed23b140e9cbe6b4217fdd  -
-avrp-manager           host    https://github.com/jilei-hao/avrp-manager.git           -  58eba001d74139921e6a28561bf34463a85924b5  -
-avrp-view-service      host    https://github.com/jilei-hao/avrp-view-service.git      -  a530cc6cbf3b5a4ccee6fd5cc43f448b70b9de5c  -
+avrp-manager           host    https://github.com/jilei-hao/avrp-manager.git           -  337b434d1b23612217716cb1e97db2eb2f208a53  -
+avrp-view-service      host    https://github.com/jilei-hao/avrp-view-service.git      -  611ecd25577b3099c3994b6b8508838144f44c55  -
 segflow4d              host    https://github.com/jilei-hao/segflow4d.git              -  6c93cdb9230534f1b5df72b7a5211d6412c85908  -
 avrp-util              host    https://github.com/jilei-hao/avrp-util.git              -  232a43f186e5ce513932149f7e3ba4d91ba2e7df  -
 automatic_measurement  host    https://github.com/jilei-hao/automatic_measurement.git  -  8d3194cec52ecea070490ddb1f25fa76151c2931  -
