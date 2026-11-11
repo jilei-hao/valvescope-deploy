@@ -40,10 +40,12 @@ for n in "$VS_DB_NAME" "$VS_DS_DB_NAME"; do
     echo "backup: $n is not reachable as $VS_DB_USER (not created yet?) — skipped"
     continue
   fi
-  mkdir -p "$out"
+  # The backup directory belongs to the deploy user; the dump is made by the operator
+  # (who holds the database password) and written through that user.
+  vs_as_user mkdir -p "$out"
   # shellcheck disable=SC2086
-  pg_dump $conn -Fc -f "$out/$n.dump" "$n"
-  echo "backup: $n -> $out/$n.dump ($(du -h "$out/$n.dump" | cut -f1))"
+  pg_dump $conn -Fc "$n" | vs_as_user tee "$out/$n.dump" >/dev/null
+  echo "backup: $n -> $out/$n.dump ($(vs_as_user du -h "$out/$n.dump" | cut -f1))"
   made=$((made + 1))
 done
 echo "backup: $made database dump(s) written"

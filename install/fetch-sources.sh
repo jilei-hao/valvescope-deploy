@@ -8,6 +8,10 @@
 #   --lock FILE  lock file to read (default: versions.lock next to this repo)
 #   --all        also fetch role=client components (e.g. avrp-ipad)
 #   --only LIST  fetch only these comma-separated component names
+#   --credential-stdin
+#                read a git credential (the output of `git credential fill`) from
+#                stdin and use it for this run only. For running as a user that has
+#                no GitHub access of its own; see vs_fetch_sources in scripts/lib.sh.
 #
 # Each component lands in DIR/<name> at a detached HEAD equal to the pinned SHA.
 # Components with a path (they live inside another repo) are checked out sparsely
@@ -23,6 +27,7 @@ LOCK="$REPO_DIR/versions.lock"
 DEST=""
 ALL=0
 ONLY=""
+CRED_STDIN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,7 +35,8 @@ while [ $# -gt 0 ]; do
     --lock) LOCK="$2"; shift 2 ;;
     --all)  ALL=1; shift ;;
     --only) ONLY=",$2,"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --credential-stdin) CRED_STDIN=1; shift ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "fetch-sources: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -42,6 +48,17 @@ if [ -z "$DEST" ]; then
   fi
   DEST="${VS_HOME:+$VS_HOME/src}"
   DEST="${DEST:-$REPO_DIR/src}"
+fi
+
+if [ "$CRED_STDIN" -eq 1 ]; then
+  # Held in this process's environment only. The helper below hands it to git (and
+  # to the submodule fetches git starts); the user's own helpers are switched off.
+  VS_GIT_CRED="$(cat)"
+  export VS_GIT_CRED GIT_TERMINAL_PROMPT=0
+  export GIT_CONFIG_COUNT=2
+  export GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=
+  export GIT_CONFIG_KEY_1=credential.helper
+  export GIT_CONFIG_VALUE_1='!f() { test "$1" = get && printf "%s\n" "$VS_GIT_CRED"; }; f'
 fi
 
 [ -f "$LOCK" ] || { echo "fetch-sources: lock file not found: $LOCK" >&2; exit 1; }

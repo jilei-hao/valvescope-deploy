@@ -6,8 +6,13 @@
 #   --env FILE            deploy.env to read (default: config/deploy.env)
 #   --out DIR             output directory (default: ./rendered, gitignored)
 #   --allow-placeholders  render even if secrets are still CHANGE_ME (for a dry run)
-#   --install             also copy each service's .env into its source checkout
-#                         under $VS_HOME/src (run as the deploy user)
+#   --install             also put the generated files where the services read them:
+#                         each service's .env into its checkout under $VS_HOME/src,
+#                         the Caddyfile into $VS_HOME/etc. They belong to $VS_USER;
+#                         when run by anyone else this uses sudo. A file whose
+#                         content is unchanged is left alone. Checkouts that are not
+#                         fetched yet are skipped. systemd units are installed by
+#                         install/install.sh, not here.
 #
 # Output:
 #   rendered/env/<service>.env     from config/templates/*.env.tmpl
@@ -31,7 +36,7 @@ while [ $# -gt 0 ]; do
     --out) OUT="$2"; shift 2 ;;
     --allow-placeholders) ALLOW_PLACEHOLDERS=1; shift ;;
     --install) INSTALL=1; shift ;;
-    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "render: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -48,7 +53,7 @@ REQUIRED="VS_HOST VS_PUBLIC_PORT VS_USER VS_HOME VS_DATA_ROOT VS_WORK_DIR VS_UPL
 VS_BACKUP_DIR VS_GATEWAY_PORT VS_MANAGER_PORT VS_VIEWER_PORT VS_PG_HOST VS_PG_PORT VS_DB_NAME
 VS_DS_DB_NAME VS_DB_USER VS_DB_PASSWORD VS_JWT_SECRET VS_WORKER_USER VS_WORKER_PASSWORD
 VS_MODULE_LIST VS_CONDA_ROOT VS_HANDLER_ENV VS_AUTOSEG_ENV VS_CT_MODELS_DIR VS_TEE_MODELS_DIR
-VS_AUTOSEG_FOLDS VS_NODE_BIN VS_CADDY_BIN"
+VS_AUTOSEG_FOLDS VS_STUDYGEN_ROI_CROP_PADDING VS_NODE_BIN VS_CADDY_BIN"
 for v in $REQUIRED; do
   eval "val=\${$v:-}"
   [ -n "$val" ] || die "$v is missing or empty in $ENV_FILE"
@@ -85,10 +90,11 @@ fi
 VS_SRC_DIR="$VS_HOME/src"
 VS_DEPLOY_DIR="$REPO_DIR"
 VS_RENDERED_DIR="$OUT"
+VS_ETC_DIR="$VS_HOME/etc"
 VS_GATEWAY_INTERNAL_URL="http://127.0.0.1:$VS_GATEWAY_PORT"
 VS_HANDLER_PYTHON="$VS_CONDA_ROOT/envs/$VS_HANDLER_ENV/bin/python"
 VS_AUTOSEG_CLI="$VS_CONDA_ROOT/envs/$VS_AUTOSEG_ENV/bin/avrp-auto-seg"
-export VS_PUBLIC_ORIGIN VS_SRC_DIR VS_DEPLOY_DIR VS_RENDERED_DIR VS_GATEWAY_INTERNAL_URL \
+export VS_PUBLIC_ORIGIN VS_SRC_DIR VS_DEPLOY_DIR VS_RENDERED_DIR VS_ETC_DIR VS_GATEWAY_INTERNAL_URL \
        VS_HANDLER_PYTHON VS_AUTOSEG_CLI
 
 render_one() { # TEMPLATE OUTPUT MODE
@@ -128,11 +134,26 @@ render_one "$REPO_DIR/services/Caddyfile.tmpl" "$OUT/Caddyfile" 644
 echo "rendered into $OUT"
 
 if [ "$INSTALL" -eq 1 ]; then
+  as_owner() { if [ "$(id -un)" = "$VS_USER" ]; then "$@"; else sudo -u "$VS_USER" "$@"; fi; }
+  put() { # SOURCE DEST MODE — only when the content differs, so a re-run changes nothing
+    local src="$1" dest="$2" mode="$3"
+    if ! as_owner test -d "$(dirname "$dest")"; then
+      echo "skip      $dest (its directory does not exist yet)"; return 0
+    fi
+    if as_owner cmp -s - "$dest" < "$src" 2>/dev/null; then
+      echo "unchanged $dest"; return 0
+    fi
+    # Read as the operator, written as the owner: $VS_USER cannot read rendered/.
+    as_owner install -m "$mode" /dev/stdin "$dest" < "$src"
+    echo "installed $dest"
+    changed=1
+  }
+  changed=0
   # Where each service actually reads its configuration from.
-  install -m 600 "$OUT/env/gateway.env"      "$VS_SRC_DIR/avrp-gateway/.env"
-  install -m 600 "$OUT/env/handler.env"      "$VS_SRC_DIR/avrp-handler/.env"
-  install -m 600 "$OUT/env/manager.env"      "$VS_SRC_DIR/avrp-manager/.env.production.local"
-  install -m 600 "$OUT/env/view-service.env" "$VS_SRC_DIR/avrp-view-service/.env.production.local"
-  echo "installed service .env files under $VS_SRC_DIR"
-  echo "note: manager and view-service read theirs at BUILD time — rebuild them after a change"
+  put "$OUT/env/gateway.env"      "$VS_SRC_DIR/avrp-gateway/.env" 600
+  put "$OUT/env/handler.env"      "$VS_SRC_DIR/avrp-handler/.env" 600
+  put "$OUT/env/manager.env"      "$VS_SRC_DIR/avrp-manager/.env.production.local" 600
+  put "$OUT/env/view-service.env" "$VS_SRC_DIR/avrp-view-service/.env.production.local" 600
+  put "$OUT/Caddyfile"            "$VS_ETC_DIR/Caddyfile" 644
+  [ "$changed" -eq 0 ] || echo "note: manager and view-service read theirs at BUILD time — rebuild them after a change; restart the others"
 fi
