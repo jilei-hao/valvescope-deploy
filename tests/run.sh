@@ -50,13 +50,17 @@ LOCK="$REPO/versions.lock"
 mkdir -p "$T/state"
 awk '$1 !~ /^#/ && NF == 6 && $2 == "host" { print $1, $5 }' "$LOCK" > "$T/state/deployed.lock"
 awk '$1 !~ /^#/ && NF == 6 { print $1, $4, $5 }' "$REPO/models.manifest" > "$T/state/deployed.models"
+# ...and every environment whose file is in this repository is deployed from that file.
+awk '$1 !~ /^#/ && NF == 4 && $3 ~ /^envs\// { print $1, $3 }' "$REPO/environments.map" | while read -r n f; do
+  [ -f "$REPO/$f" ] && echo "$n $(shasum -a 256 < "$REPO/$f" | cut -d' ' -f1)"
+done > "$T/state/deployed.envs"
 plan() { "$REPO/scripts/upgrade.sh" --plan --deployed "$T/state/deployed.lock" "$@" 2>&1; }
 bump() { # NAME -> a lock file where only NAME's sha differs
   awk -v n="$1" '$1 == n { $5 = "0123456789abcdef0123456789abcdef01234567" } { print }' "$LOCK" > "$T/lock.$1"
   printf '%s' "$T/lock.$1"
 }
 # The component names that head a section of the plan output.
-touched() { printf '%s\n' "$1" | grep -E '^[a-z][A-Za-z0-9_-]*$' | sort | tr '\n' ' '; }
+touched() { printf '%s\n' "$1" | grep -E '^[A-Za-z][A-Za-z0-9_-]*$' | sort | tr '\n' ' '; }
 
 GIT_BEFORE="$(git -C "$REPO" status --porcelain 2>/dev/null)"
 echo "== Part 1: upgrade.sh --plan"
@@ -69,15 +73,15 @@ out="$(plan --lock "$(bump segflow4d)")"; rc=$?
 [ $rc -eq 0 ] && ok "segflow4d only: exit 0" || fail "segflow4d only: exit 0" "$out"
 [ "$(touched "$out")" = "segflow4d " ] && ok "segflow4d only: the only component touched" || fail "segflow4d only: the only component touched" "$out"
 expect     "segflow4d only: fetches segflow4d"            "$out" 'fetch +fetch segflow4d at 0123456789'
-expect     "segflow4d only: reinstalls into handler env"  "$out" 'deps +pip install -e .*/segflow4d into conda env segflow4d'
+expect     "segflow4d only: reinstalls into handler env"  "$out" 'deps +pip install --no-deps -e .*/segflow4d into conda env segflow4d'
 expect     "segflow4d only: stops the handler unit"       "$out" 'stop +stop unit valvescope-handler'
 expect     "segflow4d only: starts the handler unit"      "$out" 'start +start unit valvescope-handler'
 expect     "segflow4d only: records it"                   "$out" 'record +record segflow4d = 0123456789'
 expect_not "segflow4d only: no other unit"                "$out" 'valvescope-(gateway|manager|viewer|proxy)'
 expect_not "segflow4d only: no npm, build or database"    "$out" '(npm ci|next-build|vite-build|db-init|db-backup|conda env update)'
-[ "$(printf '%s\n' "$out" | grep -Ec '^ +[0-9]+\. ')" = "6" ] && ok "segflow4d only: exactly 6 actions" || fail "segflow4d only: exactly 6 actions" "$out"
+[ "$(printf '%s\n' "$out" | grep -Ec '^ +[0-9]+\. ')" = "7" ] && ok "segflow4d only: exactly 7 actions" || fail "segflow4d only: exactly 7 actions" "$out"
 order="$(printf '%s\n' "$out" | awk '/^ +[0-9]+\. /{printf "%s ", $2}')"
-[ "$order" = "stop fetch deps check-modules start record " ] && ok "segflow4d only: order stop→fetch→deps→check-modules→start→record" || fail "segflow4d only: order" "$order"
+[ "$order" = "stop fetch deps render check-modules start record " ] && ok "segflow4d only: order stop→fetch→deps→render→check-modules→start→record" || fail "segflow4d only: order" "$order"
 expect_not "segflow4d only: no environment or model touched" "$out" '^(env|model):' 
 
 out="$(plan --lock "$(bump avrp-gateway)")"
@@ -87,7 +91,7 @@ expect     "gateway only: database backup first"   "$out" 'db-backup'
 expect     "gateway only: db-init"                 "$out" 'db-init +install/db-init.sh'
 expect_not "gateway only: handler not restarted"   "$out" 'valvescope-handler'
 order="$(printf '%s\n' "$out" | awk '/^ +[0-9]+\. /{printf "%s ", $2}')"
-[ "$order" = "stop fetch deps db-backup db-init start record " ] && ok "gateway only: backup before db-init, both while stopped" || fail "gateway only: order" "$order"
+[ "$order" = "stop fetch deps render db-backup db-init start record " ] && ok "gateway only: backup before db-init, both while stopped" || fail "gateway only: order" "$order"
 
 out="$(plan --lock "$(bump avrp-manager)")"
 order="$(printf '%s\n' "$out" | awk '/^ +[0-9]+\. /{printf "%s ", $2}')"
@@ -111,7 +115,13 @@ out="$(plan --only no-such-thing)"; rc=$?
 
 out="$("$REPO/scripts/upgrade.sh" --plan --deployed "$T/absent" 2>&1)"
 n="$(touched "$out" | wc -w | tr -d ' ')"
-[ "$n" = "8" ] && ok "no deployed.lock: all 8 host components planned (install order)" || fail "no deployed.lock: all 8 host components" "$out"
+[ "$n" = "9" ] && ok "no deployed.lock: all 9 host components planned (install order)" || fail "no deployed.lock: all 9 host components" "$out"
+# what a service imports or runs is installed before the service (first install walks the lock in order)
+seq="$(printf '%s\n' "$out" | grep -E '^[A-Za-z][A-Za-z0-9_-]*$' | tr '\n' ' ')"
+case "$seq" in *"FireANTs "*"segflow4d "*"avrp-auto-seg "*"avrp-handler "*) ok "install order: FireANTs, segflow4d and avrp-auto-seg before avrp-handler" ;; *) fail "install order" "$seq" ;; esac
+out="$(plan --lock "$(bump FireANTs)")"
+expect     "FireANTs only: built into the handler env"   "$out" 'deps +install/build-fireants.sh: .*/FireANTs into conda env segflow4d'
+expect     "FireANTs only: restarts the handler"         "$out" 'start +start unit valvescope-handler'
 
 # every host component of the lock has a map line, and the map has no strangers
 miss=""; for c in $(awk '$1 !~ /^#/ && NF == 6 { print $1 }' "$LOCK"); do
@@ -216,8 +226,21 @@ done
 
 
 echo "== Part 5: environments are data"
+[ -f "$REPO/envs/handler.yml" ] && ok "envs/handler.yml is in the repository" || fail "envs/handler.yml is in the repository"
+grep -Eq '^ +- torch==[0-9.]+\+cu[0-9]+$' "$REPO/envs/handler.yml" && grep -q -- '--extra-index-url https://download.pytorch.org/whl/cu' "$REPO/envs/handler.yml" \
+  && ok "handler.yml pins a CUDA torch build and names its index" || fail "handler.yml torch pin"
+out="$(grep -E '^ +- [A-Za-z0-9_.-]+' "$REPO/envs/handler.yml" | grep -v -- '--extra-index-url' | grep -Ev '^ +- (nvidia|defaults|pip:)$' | grep -Ev '(==|=[^=]+=)' )"
+[ -z "$out" ] && ok "handler.yml: every package has an exact version" || fail "handler.yml: unpinned package" "$out"
+expect_not "handler.yml does not list what is installed as a pinned component" "$(cat "$REPO/envs/handler.yml" | grep -E '^ +- ')" '(fireants|segflow4d|avrp-handler)'
+sed 's|envs/handler.yml|envs/not-there.yml|' "$REPO/environments.map" > "$T/envs.missing"
+out="$(plan --envs "$T/envs.missing")"
+expect "an env-file that is not in the repo: said so, not managed" "$out" "environment 'handler': envs/not-there.yml is not in this repository yet"
 out="$(plan)"
-expect "handler env-file not in the repo yet: said so, not managed" "$out" "environment 'handler': envs/handler.yml is not in this repository yet"
+rm -f "$T/state/deployed.envs.keep"; cp "$T/state/deployed.envs" "$T/state/deployed.envs.keep"; : > "$T/state/deployed.envs"
+out="$(plan)"
+expect "handler env not deployed yet: env:handler is planned" "$out" '^env:handler$'
+expect "handler env: built from envs/handler.yml" "$out" 'env-apply +create or update conda env segflow4d from .*/envs/handler.yml'
+cp "$T/state/deployed.envs.keep" "$T/state/deployed.envs"
 # A fictional third environment and a component that installs into it. Only data
 # files are written here; scripts/upgrade.sh is the committed one.
 mkdir -p "$T/b/envs"
@@ -234,7 +257,7 @@ out="$(bplan)"; rc=$?
 expect "third env: env:measure is planned"                 "$out" '^env:measure$'
 expect "third env: created from its env-file under its real name" "$out" "env-apply +create or update conda env vs-measure-env from .*/b/envs/measure.yml"
 expect "third env: recorded in deployed.envs"              "$out" 'record-env +record env:measure .* in deployed.envs'
-expect "third env: its component installs into it"         "$out" 'deps +pip install -e .*/dl-measure into conda env vs-measure-env'
+expect "third env: its component installs into it"         "$out" 'deps +pip install --no-deps -e .*/dl-measure into conda env vs-measure-env'
 [ "$(touched "$out")" = "dl-measure " ] && ok "third env: no existing component touched" || fail "third env: no existing component touched" "$out"
 first="$(printf '%s\n' "$out" | grep -E '^(env:|[a-z])' | grep -v '^upgrade' | head -1)"
 [ "$first" = "env:measure" ] && ok "third env: environment comes before the component that needs it" || fail "environment before component" "$out"
@@ -299,7 +322,7 @@ echo 'x' >> "$M/repo/models/fake-model.files"
 out="$(vm)"; rc=$?;        [ $rc -ne 0 ] && has "$out" 'does not match the checksum' && ok "file list edited by hand: refused" || fail "edited list refused" "$out"
 # the planner
 mplan() { VS_DEPLOY_ENV="$M/deploy.env" "$REPO/scripts/upgrade.sh" --plan --manifest "$M/repo/models.manifest" --deployed "$M/state/deployed.lock" "$@" 2>&1; }
-mkdir -p "$M/state"; cp "$T/state/deployed.lock" "$M/state/"
+mkdir -p "$M/state"; cp "$T/state/deployed.lock" "$T/state/deployed.envs" "$M/state/"
 echo "fake-model v1 $sum" > "$M/state/deployed.models"
 out="$(mplan)"; rc=$?
 [ $rc -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -E '^(model|env):|^[a-z][A-Za-z0-9_-]*$' | tr '\n' ' ')" = "model:fake-model " ] && ok "model version change: the only item planned" || fail "model change is the only item" "$out"
@@ -362,6 +385,7 @@ else
     sed -e "s/^VS_PG_PORT=.*/VS_PG_PORT=$PORT/" -e 's/^VS_DB_NAME=.*/VS_DB_NAME=vs_test_main/' \
         -e 's/^VS_DS_DB_NAME=.*/VS_DS_DB_NAME=vs_test_blob/' -e 's/^VS_DB_USER=.*/VS_DB_USER=vs_test_role/' \
         -e 's/^VS_DB_PASSWORD=.*/VS_DB_PASSWORD=testpw123/' -e "s|^VS_BACKUP_DIR=.*|VS_BACKUP_DIR=$T/backup|" \
+        -e "s/^VS_USER=.*/VS_USER=$(id -un)/" \
         "$REPO/config/deploy.env.example" > "$VS_DEPLOY_ENV"
     export VS_PG_ADMIN_PSQL="psql -h 127.0.0.1 -p $PORT -U vs_test_admin"
     q() { psql -h 127.0.0.1 -p "$PORT" -U vs_test_admin -X -At -d "$1" -c "$2" 2>&1; }

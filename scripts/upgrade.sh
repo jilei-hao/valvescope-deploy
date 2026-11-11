@@ -12,6 +12,8 @@
 #   --manifest FILE  model weights               (default: models.manifest)
 #   --deployed FILE  deployed component versions (default: $VS_STATE_DIR/deployed.lock);
 #                    deployed.envs and deployed.models are read from the same directory
+#   --no-health      do not finish with scripts/health.sh (install.sh uses this: on a
+#                    first install the services are started after the upgrade)
 #
 # How it works. Three things are versioned, each with a "wanted" file in this
 # repository and a "deployed" file on the server:
@@ -25,7 +27,8 @@
 # after every one of its steps succeeded — so a failed run can simply be repeated.
 #
 #   environment   stop its units -> create/update the conda env -> start -> record
-#   component     stop its units -> fetch -> deps -> build -> database -> start -> record
+#   component     stop its units -> fetch -> deps -> config -> build -> database -> start -> record
+#   ("start" restarts a unit this script stopped; a unit that was not running is left alone)
 #   model         (you put the files in place) -> full verify -> stop -> start -> record
 #
 # Before the worker unit is started, the module list is checked against the
@@ -44,6 +47,7 @@ MAP=""
 ENVS=""
 MANIFEST=""
 DEPLOYED=""
+NO_HEALTH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan) PLAN=1; shift ;;
@@ -53,7 +57,8 @@ while [ $# -gt 0 ]; do
     --envs) ENVS="$2"; shift 2 ;;
     --manifest) MANIFEST="$2"; shift 2 ;;
     --deployed) DEPLOYED="$2"; shift 2 ;;
-    -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --no-health) NO_HEALTH=1; shift ;;
+    -h|--help) sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "upgrade: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -183,16 +188,17 @@ while read -r name role url tag sha path; do
   case "$deps" in
     -) ;;
     npm-ci) emit "$name" deps "npm-ci" ;;
-    pip-e:*|conda-update:*)
+    pip-e:*|conda-update:*|fireants:*)
       conda_env_name "${deps#*:}" >/dev/null
       emit "$name" deps "$deps" ;;
     *) die "$name: unknown deps step '$deps' in $(basename "$MAP")" ;;
   esac
+  # A component that is built or that a unit runs has a generated config file in
+  # its checkout; a fresh checkout has none, so it is (re)written before use.
+  if [ "$build" != "-" ] || [ "$restart" != "-" ]; then emit "$name" render "service .env files"; fi
   case "$build" in
     -) ;;
-    next-build|vite-build)
-      emit "$name" render "service .env files"
-      emit "$name" build "$build" ;;
+    next-build|vite-build) emit "$name" build "$build" ;;
     *) die "$name: unknown build step '$build' in $(basename "$MAP")" ;;
   esac
   case "$db" in
@@ -237,10 +243,11 @@ describe() { # ITEM ACTION ARG -> human sentence
     deps)
       case "$x" in
         npm-ci)         printf 'npm ci in %s' "$VS_SRC_DIR/$c" ;;
-        pip-e:*)        printf 'pip install -e %s into conda env %s' "$VS_SRC_DIR/$c" "$(conda_env_name "${x#*:}")" ;;
+        pip-e:*)        printf 'pip install --no-deps -e %s into conda env %s, then pip check' "$VS_SRC_DIR/$c" "$(conda_env_name "${x#*:}")" ;;
         conda-update:*) printf 'conda env update %s from %s/environment.yml' "$(conda_env_name "${x#*:}")" "$VS_SRC_DIR/$c" ;;
+        fireants:*)     printf 'install/build-fireants.sh: fireants + compiled CUDA ops from %s into conda env %s' "$VS_SRC_DIR/$c" "$(conda_env_name "${x#*:}")" ;;
       esac ;;
-    render)    printf 're-render and install the service .env files' ;;
+    render)    printf 'config/render.sh --install (service .env files and Caddyfile; unchanged files are left alone)' ;;
     build)     printf '%s in %s' "$x" "$VS_SRC_DIR/$c" ;;
     db-backup) printf 'dump databases %s to %s' "$x" "$VS_BACKUP_DIR" ;;
     db-init)   printf 'install/db-init.sh (%s; never drops or re-seeds)' "$x" ;;
@@ -286,28 +293,71 @@ fi
 # --- the executor ---------------------------------------------------------------
 # Small functions, one per action. Everything that is destructive to data is absent
 # by design: no step here drops a database, clears the blob root or re-seeds.
+# Who runs what: see vs_as_user in scripts/lib.sh. Commands run from / or from the
+# component's checkout, never from the operator's own directory, which $VS_USER
+# may not be able to enter.
 CONDA="$VS_CONDA_ROOT/bin/conda"
-as_user() { # run a command as the deploy user
-  if [ "$(id -un)" = "$VS_USER" ]; then "$@"; else sudo -u "$VS_USER" -H "$@"; fi
+as_user() { vs_as_user "$@"; }
+# An upgrade restarts what was running; it does not start what was not. On a first
+# install nothing runs yet (install/install.sh starts everything at the end), and a
+# unit an operator stopped on purpose stays stopped. What this script stopped is
+# remembered in the state directory, so a run that failed half-way and is repeated
+# still brings those units back.
+STOPPED_FILE="$(dirname "$DEPLOYED")/stopped-by-upgrade"
+do_stop() {
+  if systemctl is-active --quiet "$1"; then
+    vs_as_user mkdir -p "$(dirname "$STOPPED_FILE")"
+    grep -qx -- "$1" "$STOPPED_FILE" 2>/dev/null || printf '%s\n' "$1" | vs_as_user tee -a "$STOPPED_FILE" >/dev/null
+    sudo systemctl stop "$1"
+  else
+    echo "   ($1 is not running)"
+  fi
 }
-do_stop()  { sudo systemctl stop "$1"; }
-do_start() { sudo systemctl start "$1"; }
-do_fetch() { as_user "$REPO_DIR/install/fetch-sources.sh" --dest "$VS_SRC_DIR" --lock "$LOCK" --only "$1"; }
+do_start() {
+  if grep -qx -- "$1" "$STOPPED_FILE" 2>/dev/null; then
+    sudo systemctl start "$1"
+    grep -vx -- "$1" "$STOPPED_FILE" | vs_as_user tee "$STOPPED_FILE.tmp" >/dev/null || true
+    vs_as_user mv "$STOPPED_FILE.tmp" "$STOPPED_FILE"
+  else
+    echo "   ($1 was not running before this upgrade — left as it is)"
+  fi
+}
+do_fetch() { ( cd / && vs_fetch_sources --dest "$VS_SRC_DIR" --lock "$LOCK" --only "$1" ); }
 do_deps() { # COMPONENT STEP
-  local dir="$VS_SRC_DIR/$1"
+  local dir="$VS_SRC_DIR/$1" prefix
   case "$2" in
-    npm-ci)         ( cd "$dir" && as_user npm ci ) ;;
-    pip-e:*)        as_user "$VS_CONDA_ROOT/envs/$(conda_env_name "${2#*:}")/bin/pip" install -e "$dir" ;;
-    conda-update:*) ( cd "$dir" && as_user "$CONDA" env update -n "$(conda_env_name "${2#*:}")" -f environment.yml ) ;;
+    npm-ci)         ( cd "$dir" && vs_as_user_net npm ci --no-audit --no-fund ) ;;
+    pip-e:*)
+      # --no-deps: every dependency is pinned in the environment file. Without it
+      # pip would pull whatever is newest for anything the component names loosely
+      # (segflow4d asks for "fireants", which would replace the pinned build).
+      # pip check then fails the step if the component needs something the file lacks.
+      prefix="$(vs_conda_env_prefix "$(conda_env_name "${2#*:}")")"
+      ( cd "$dir" && vs_as_user_net "$prefix/bin/python" -m pip install --no-deps -e "$dir" \
+          && vs_as_user "$prefix/bin/python" -m pip check ) ;;
+    conda-update:*) ( cd "$dir" && vs_as_user_net "$CONDA" env update -n "$(conda_env_name "${2#*:}")" -f environment.yml ) ;;
+    fireants:*)
+      prefix="$(vs_conda_env_prefix "$(conda_env_name "${2#*:}")")"
+      ( cd "$dir" && vs_as_user_net "$REPO_DIR/install/build-fireants.sh" --env-prefix "$prefix" --src "$dir" ) ;;
   esac
 }
 do_env_apply() { # ENV NAME — create the conda env if it is absent, else update it
   local env file; env="$(conda_env_name "$1")"; file="$(env_file "$1")"
-  if [ -d "$VS_CONDA_ROOT/envs/$env" ]; then as_user "$CONDA" env update -n "$env" -f "$file"
-  else as_user "$CONDA" env create -n "$env" -f "$file"; fi
+  [ -x "$CONDA" ] || die "no conda at $CONDA — install/install.sh puts miniconda there"
+  # conda writes a temporary requirements file next to the env-file, which lives in
+  # the operator's repository; hand it a copy the deploy user owns instead.
+  local tmp; tmp="$(vs_as_user mktemp -d "${TMPDIR:-/tmp}/vs-env.XXXXXX")"
+  vs_as_user tee "$tmp/$(basename "$file")" < "$file" >/dev/null
+  if vs_as_user test -d "$VS_CONDA_ROOT/envs/$env"; then
+    ( cd / && vs_as_user_net "$CONDA" env update -n "$env" -f "$tmp/$(basename "$file")" )
+  else
+    ( cd / && vs_as_user_net "$CONDA" env create -n "$env" -f "$tmp/$(basename "$file")" )
+  fi
+  vs_as_user rm -f "$tmp/$(basename "$file")"
+  vs_as_user rmdir "$tmp" 2>/dev/null || true
 }
-do_render() { as_user "$REPO_DIR/config/render.sh" --install; }
-do_build()  { ( cd "$VS_SRC_DIR/$1" && as_user npm run build ); }
+do_render() { "$REPO_DIR/config/render.sh" --install; }
+do_build()  { ( cd "$VS_SRC_DIR/$1" && vs_as_user_net npm run build ); }
 do_db_backup() { # COMPONENT — a server that already runs this component must yield both dumps
   if [ -n "$(deployed_sha "$1")" ]; then "$REPO_DIR/scripts/backup.sh" --db-only --must-exist
   else "$REPO_DIR/scripts/backup.sh" --db-only; fi
@@ -338,7 +388,9 @@ while IFS="$(printf '\t')" read -r c a x <&3; do
   case "$a" in
     stop)          do_stop "$x" ;;
     start)         do_start "$x" ;;
-    check-modules) do_check_modules ;;
+    check-modules) # only meaningful once the worker and the database are both there
+                   if [ -n "$(deployed_sha avrp-handler)" ] && [ -n "$(deployed_sha avrp-gateway)" ]; then do_check_modules
+                   else echo "   (first install: the module list is checked by install.sh once everything is in place)"; fi ;;
     fetch)         do_fetch "$c" ;;
     deps)          do_deps "$c" "$x" ;;
     render)        do_render ;;
@@ -356,4 +408,5 @@ while IFS="$(printf '\t')" read -r c a x <&3; do
 done 3< "$PLAN_FILE"
 
 echo "upgrade: done — $changed item(s) updated"
+[ "$NO_HEALTH" -eq 0 ] || exit 0
 "$REPO_DIR/scripts/health.sh" || { echo "upgrade: finished, but health.sh reports problems" >&2; exit 1; }
