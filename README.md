@@ -5,13 +5,12 @@ elsewhere (the `avrp-developer` wrapper and the `avrp-*` repositories); this
 repository holds no service code. It holds one known-good set of versions and the
 glue to install and operate them.
 
-> **Status (2026-11-11): rehearsed on the lab box, not yet installed there.**
-> On Ludwig (Ubuntu 24.04, RTX 2080) the whole install path except the root
-> steps ran in an unprivileged staging tree: both conda environments built from
-> their files, FireANTs compiled, databases initialised, a study went through all
-> seven modules and rendered in the web viewer behind the proxy. The real install
-> (dedicated user, `/opt`, `/srv`, systemd, firewall) has **not** run: it needs
-> sudo. One upstream fix it depends on is not pushed. See [Status](#status).
+> **Status (2026-11-13): installed and running on the lab box.** `install/install.sh`
+> brought Ludwig (Ubuntu 24.04, RTX 2080) from nothing to five running systemd
+> units; a study submitted by a person's account went through all seven modules
+> and rendered in the web viewer at `http://10.150.12.82/viewer/`. Re-running the
+> installer changed nothing. Not yet verified: access from a second machine, the
+> iPad, a reboot, a real upgrade, backups off the data disk. See [Status](#status).
 
 ## The contract
 
@@ -282,48 +281,37 @@ install/db-init.sh --plan --gateway-dir /tmp/vs-src/avrp-gateway   # asks Postgr
 
 Three levels, used exactly:
 
-- **tested** — `tests/run.sh` passes (144 checks on Ludwig, 2026-11-11, Ubuntu
-  24.04; the database part against a throwaway PostgreSQL 16.15).
-- **rehearsed on Ludwig** — ran for real on the lab box on 2026-11-11, but as the
-  developer's account in `~/vs-staging`: a private Miniconda, a throwaway
-  PostgreSQL 16 on its own port, ports 8180/3190/8190/5290, services started by
-  hand. No sudo, no dedicated user, no systemd, no port 80.
+- **tested** — `tests/run.sh` passes (144 checks on Ludwig, Ubuntu 24.04; the
+  database part against a throwaway PostgreSQL 16.15).
+- **installed on Ludwig** — ran for real on 2026-11-13 through `install/install.sh`:
+  user `valvescope`, `/opt/valvescope`, `/srv/valvescope`, systemd, port 80.
 - **not run** — written only.
 
 | Piece | State |
 |---|---|
-| `versions.lock`, `install/fetch-sources.sh` | tested; rehearsed (all 9 host components fetched at their pins). **Not run:** the credential hand-over to a different user (`--credential-stdin`) |
-| `config/render.sh`, templates, `install/gen-secrets.sh` | tested; rehearsed (`--install` twice: second run leaves every file alone). **Not run:** installing files as another user through sudo |
-| `scripts/upgrade.sh --plan`, `--only` | tested |
-| `scripts/upgrade.sh` executor | **rehearsed**: a first install of all 13 items ran start to finish; a second run said "nothing to do". **Not run:** its `sudo -u` and `systemctl` paths, and a real upgrade of one component on a live install |
-| `install/db-init.sh` | tested; rehearsed (role, both databases, 7 migrations, functions; second run: nothing to do) |
-| `envs/handler.yml` | **captured and proven on Ludwig**: rebuilt from the file in a separate Miniconda; conda packages identical to the developer environment by name, version and build; pip packages identical plus the listed additions |
-| `install/build-fireants.sh` | rehearsed: compiled with gcc-12 against the rebuilt environment, twice (by hand, then by `upgrade.sh`) |
-| auto-segmentation environment (`src:avrp-auto-seg/environment.yml`) | rehearsed: built from the pinned file; torch 2.7.0+cu126 sees the GPU; ran TEE inference inside the pipeline |
-| `models.manifest` | the three real models are **measured** (23 files, all hashed) from the developer's copies and passed a full verify there. **Not done:** the deployment's own copy under `/srv/valvescope/models` |
-| `scripts/check-modules.sh` | tested; rehearsed against the real worker source and a real database, all 7 modules |
-| `install/accounts.sh` | rehearsed: worker + two people created, second run changes nothing, all log in |
-| Proxy (`services/Caddyfile.tmpl`) | rehearsed with Ubuntu's caddy 2.6.2 on port 8180: `/` manager, `/viewer/` viewer, `/api/` gateway. **Not run:** on port 80 as the deploy user |
-| End to end | **rehearsed**: tav006 (TEE, 12 time points) staged through the proxy as a person's account; all 7 modules reached `completed`; the manager's "Open Viewer" opened `/viewer/`; the study rendered with measurements and no console errors (headless Chrome). **Needed the unpinned gateway fix below** |
-| `scripts/health.sh` | rehearsed: every check passed except the five systemd-unit checks, which cannot pass without the units. The loopback-confinement check is **not run** |
-| `install/install.sh` | step 1 (`--check`) run on Ludwig — it stops on the one missing prerequisite, caddy. **Steps 2–11 not run** (they need sudo) |
-| systemd units | **not run.** Rendered only |
+| `install/install.sh` | **installed on Ludwig**: all 11 steps. A second full run changed nothing — same deployed state, same rendered files and units, no service restarted, same row counts, study still `completed` |
+| `versions.lock`, `install/fetch-sources.sh` | tested; installed: 9 host components at their pins, the private ones fetched as `valvescope` with the operator's credential handed over on stdin |
+| `config/render.sh`, templates, `install/gen-secrets.sh` | tested; installed |
+| `scripts/upgrade.sh` | plans tested; executor **installed on Ludwig as a first install** (13 items). **Not run:** an upgrade of one component on the live install, and with it the stop / restart-what-was-running path |
+| `install/db-init.sh` | tested; installed (role, both databases, 7 migrations, functions; second run: nothing to do) |
+| `envs/handler.yml`, `install/build-fireants.sh` | installed: environment created from the file under `/opt/valvescope/miniconda3`, FireANTs compiled with gcc-12 |
+| auto-segmentation environment | installed from the pinned `environment.yml`; ran TEE inference on the GPU |
+| Private Node and Miniconda | installed by step 4 (Node v24.10.0, Miniconda 25.1.1; checksums verified) |
+| `models.manifest` | measured; the deployment's own copy under `/srv/valvescope/models` passed `verify-models.sh --full` (23 files re-hashed) |
+| `install/accounts.sh` | installed: worker account + 5 people; second run changes nothing |
+| systemd units | **installed and running**; all six report `enabled`. The gateway's loopback confinement works: it refuses on the LAN address |
+| Proxy (`services/Caddyfile.tmpl`) | running on port 80 as `valvescope` (Ubuntu caddy 2.6.2) |
+| `scripts/health.sh` | exits 0 on Ludwig, all 26 checks |
+| End to end | **done on the install**: tav006 (TEE, 12 time points) staged through `http://10.150.12.82/api` as a person's account; all 7 modules `completed`; manager login → "Open Viewer" → `/viewer/`; study rendered with measurements and no console errors. The browser was headless Chrome **on Ludwig itself** |
+| `scripts/study-status.sh` | used for the above |
+| From another LAN machine; the iPad client | **not verified** |
+| Reboot survival | units are enabled; **no reboot was done** |
+| Firewall | `ufw` on Ludwig is **inactive**: nothing was changed and nothing protects the box's other ports. The gateway and the two internal servers do not accept LAN connections on their own (loopback bind or unit confinement) |
 | `scripts/start.sh`, `stop.sh` | **not run** |
-| `scripts/backup.sh --db-only` | tested; rehearsed once as part of the gateway step (no databases yet, so it skipped). Full backup: stub |
+| `scripts/backup.sh --db-only` | tested; on Ludwig it has only run against a server with no databases yet. Full backup: stub |
+| Backups | `VS_BACKUP_DIR` is `/srv/valvescope/backup`, the **same disk as the data** — there is no NAS mount on the box |
 | `scripts/rollback.sh` | stub |
 | `scripts/destroy-databases.sh` and the destructive-command lint | tested |
-| Firewall | **not looked at**: `ufw` is active on Ludwig and its rules need sudo to read |
-| Reboot survival | **not verified** |
-| Backups | `VS_BACKUP_DIR` on Ludwig is `/srv/valvescope/backup`, the **same disk as the data** — there is no NAS mount on the box. Protects against a bad migration, not a lost disk |
-
-### What the first install on Ludwig still needs
-
-1. sudo for the installing account (the install was prepared without it).
-2. `sudo apt install caddy && sudo systemctl disable --now caddy.service`.
-3. The gateway fix for worker access (next table, row 9) pushed and pinned —
-   without it no study submitted by a person can be processed.
-4. The three model directories copied to `/srv/valvescope/models` (9.0 GB).
-5. The names for the per-person accounts.
 
 ### Upstream state for R1 (never wipe data)
 
@@ -347,11 +335,12 @@ Fixes belong in the service repositories; nothing here patches source.
 
 | # | Where | Problem | State |
 |---|---|---|---|
-| 9 | `avrp-gateway` | **A worker with its own account cannot process other people's studies.** `fn_verify_study_ownership` only accepts a user connected to the study's case, so the worker gets `403` on every `/data` download and `/study-data` upload. Seen live: phase detection failed with `HTTP 403` on a study staged by a person's account. A dev box hides it (one account does both). | **Fix written, not pushed**: branch `fix/service-account-study-access` (`da83170`, on top of `8f6bac8`): role `application` passes for any existing study. Function only, no migration. Proven against a throwaway PostgreSQL 16 and, applied by hand to the rehearsal database, let the whole pipeline complete. **The pin must move to it before the install.** |
+| 9 | `avrp-gateway` | **A worker with its own account cannot process other people's studies.** `fn_verify_study_ownership` only accepted a user connected to the study's case, so the worker got `403` on every `/data` download. Seen live in the rehearsal. A dev box hides it (one account does both). | **Fixed and pinned** (`da83170`, branch `fix/service-account-study-access`, not yet on `main`): role `application` passes for any existing study. On the install, the worker processed a study submitted by `jilei`. |
 | 10 | `avrp-gateway` | `app.listen(port)` binds every interface; there is no host setting. | Open. Contained here by the unit's `IPAddressAllow=localhost`. |
 | 11 | `avrp-gateway` | `POST /user` creates an account without authentication: anyone who can reach `/api` can register. | Open. Needs a decision upstream (the manager has a registration page that uses it). |
 | 12 | `avrp-gateway` | `routes/login.js` loads `.env.local`, not `.env`, and reads `SECRET_KEY` at import. It works only because `routes/user.js` is imported first and loads `.env`. | Open. Fragile, not broken. |
 | 13 | `avrp-handler` | The worker prints the full login response, token included, to its log (the journal on a server). | Open. |
+| 17 | this box | `/usr/bin/node`, `npm`, `npx` are symlinks into the developer's nvm under `/home/jileihao` (mode 750); no other user can run them. | Not upstream. The deployment installs its own Node. |
 | 14 | `avrp-handler` | `setup.py` declares `ipython` and `watchdog`; nothing pins them and the developer environment never had them. | Pinned in `envs/handler.yml`. Upstream should drop or pin them. |
 | 15 | `avrp-view-service` | The login page has a "Demo Login" button with the developer account's password hard-coded. It fails with 401 on a deployment, but it is the first button on the page. It also lower-cases usernames. | Open. `accounts.sh` only allows lower-case names. |
 | 16 | `avrp-gateway`, `avrp-handler`, `avrp-auto-seg` | Defaults in code point into the developer's home directory (`/home/jileihao/...` model paths, the auto-seg CLI path, `avrpdev` credentials). | All overridden by the rendered `.env`; harmless while every key is rendered. |

@@ -11,6 +11,8 @@ the README's Status table says which parts have actually run on the host.
   (see the coexistence table in the README).
 
 ## 2. Everyday commands
+- Has a study finished: `scripts/study-status.sh <study id>` (exit 0 when every module is completed)
+- The worker's log needs sudo: `sudo journalctl -u valvescope-handler -f`
 - Start / stop / status: `scripts/start.sh`, `scripts/stop.sh`, `systemctl status 'valvescope-*'`
 - Is it healthy: `scripts/health.sh`
 - Logs: `journalctl -u valvescope-handler -f` (same for the other units)
@@ -27,7 +29,7 @@ sudo apt install caddy gcc-12 g++-12
 sudo systemctl disable --now caddy.service   # Ubuntu's package starts a welcome page on port 80
 ```
 
-plus a working `nvidia-smi`, Node >= 20, PostgreSQL 16 on the port in `deploy.env`,
+plus a working `nvidia-smi`, PostgreSQL 16 on the port in `deploy.env`,
 and a stored git credential for github.com on your own account (most pinned
 repositories are private; `git ls-remote https://github.com/jilei-hao/avrp-gateway.git`
 must work for you).
@@ -55,7 +57,7 @@ builds and data, and never sees `deploy.env`: it gets the rendered service files
 | 1 | prerequisites, configuration | refuses the developer checkout's ports, database names and paths |
 | 2 | Unix user and directories | existing directories keep their contents |
 | 3 | secrets | only fills values still set to `CHANGE_ME` |
-| 4 | miniconda at `$VS_CONDA_ROOT` | pinned installer, checksum verified |
+| 4 | miniconda at `$VS_CONDA_ROOT`, node at `$VS_NODE_BIN` | pinned downloads, checksums verified |
 | 5 | systemd units | installed and enabled; nothing started |
 | 6 | model weights | **stops here until a person has copied them** — see 5b |
 | 7 | gateway and databases | `scripts/upgrade.sh --only avrp-gateway` |
