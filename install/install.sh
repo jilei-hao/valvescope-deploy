@@ -27,7 +27,7 @@
 #    3  secrets                           install/gen-secrets.sh
 #    4  miniconda and node                private installs at $VS_CONDA_ROOT and, when
 #                                         $VS_NODE_BIN is under $VS_HOME, there too
-#    5  systemd units                     rendered, installed, enabled — not started
+#    5  systemd units and settings        rendered, installed, enabled — not started
 #    6  model weights                     checks they are in place (a person copies them)
 #    7  gateway and databases             fetch, npm ci, config, install/db-init.sh
 #    8  accounts                          the worker's and config/accounts.txt
@@ -247,6 +247,10 @@ if step 5 "systemd units"; then
     if systemctl is-enabled --quiet "$u" 2>/dev/null; then :; else sudo systemctl enable "$u" >/dev/null 2>&1; did "enabled $u"; fi
   done
   did "every unit is enabled (starts with the machine); this step starts nothing"
+  # Service settings too, so that an edit to deploy.env followed by this script
+  # reaches every generated file. Unchanged files are left alone; checkouts that
+  # are not fetched yet are skipped (the upgrade steps below write those).
+  "$REPO_DIR/config/render.sh" --install | grep -v '^rendered into' | sed 's/^/   /'
 fi
 
 # ---------------------------------------------------------------------------------
