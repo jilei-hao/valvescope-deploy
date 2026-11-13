@@ -221,6 +221,9 @@ tests/run.sh             laptop tests: upgrade plans, db-init plans, a real db-i
                          run against a throwaway Postgres, the destructive-command lint,
                          a fictional third environment, a fake model, the module guard
 docs/
+  guide/                 ValveScope-Server-Guide (.md source, .pdf to read): deploying,
+                         maintaining and the architecture, with diagrams, for a
+                         developer without server experience. build.sh remakes the PDF
   RUNBOOK.md             for whoever operates the server
   TEAM_README.md         for the people who use ValveScope
 ```
