@@ -32,7 +32,7 @@
 # files of its installed `fireants` 1.4.0 are byte-identical to this commit, and it
 # carries fused_ops 1.2.0. PyPI has fireants 1.4.0 but no wheel of the compiled ops.
 
-avrp-gateway           host    https://github.com/jilei-hao/avrp-gateway.git           -  8f6bac8d19a03ae50189b085ce42d994ba3f95b8  -
+avrp-gateway           host    https://github.com/jilei-hao/avrp-gateway.git           -  da831705c363301bdb69188a7428a540f4516cf0  -
 FireANTs               host    https://github.com/rohitrango/FireANTs.git              -  f551add7a2467cb2130009b54a59b8a96b3cab7c  -
 segflow4d              host    https://github.com/jilei-hao/segflow4d.git              -  6c93cdb9230534f1b5df72b7a5211d6412c85908  -
 # Tracked directly inside the developer wrapper (not a submodule): pinned as wrapper SHA + path.
