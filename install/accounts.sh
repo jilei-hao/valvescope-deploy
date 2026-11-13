@@ -4,6 +4,9 @@
 #
 #   install/accounts.sh            create what is missing
 #   install/accounts.sh --list     show the accounts in the database; change nothing
+#   install/accounts.sh --reset-password NAME
+#                                  give an existing person a new generated password
+#                                  (printed once, and written to config/accounts.txt)
 #
 # Where accounts come from
 #   worker    VS_WORKER_USER / VS_WORKER_PASSWORD in config/deploy.env, role "application"
@@ -22,11 +25,12 @@
 # Note: bcrypt reads only the first 72 bytes. With the 48-character SECRET_KEY that
 # gen-secrets.sh makes, the first 24 characters of a password count.
 set -euo pipefail
-LIST=0
+LIST=0; RESET=""
 case "${1:-}" in
   --list) LIST=1 ;;
+  --reset-password) RESET="${2:-}"; [ -n "$RESET" ] || { echo "accounts: --reset-password needs a username" >&2; exit 2; } ;;
   "") ;;
-  -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "accounts: unknown argument: $1" >&2; exit 2 ;;
 esac
 . "$(cd "$(dirname "$0")/.." && pwd)/scripts/lib.sh"
@@ -44,6 +48,31 @@ fi
 
 # Lower case only: the web viewer's login form lower-cases what is typed, so an
 # account with a capital letter in its name could never log in there.
+bcrypt_of() { # reads the password on stdin, prints the hash the gateway expects
+  ( cd "$GW" && SECRET_KEY="$VS_JWT_SECRET" "$VS_NODE_BIN" --input-type=module -e \
+      "import bcrypt from 'bcrypt'; import fs from 'node:fs'; console.log(await bcrypt.hash(process.env.SECRET_KEY + fs.readFileSync(0, 'utf8'), 10));" )
+}
+
+if [ -n "$RESET" ]; then
+  printf '%s' "$RESET" | grep -Eq '^[a-z0-9][a-z0-9._-]{1,49}$' || die "'$RESET' is not an account name"
+  [ "$RESET" != "$VS_WORKER_USER" ] || die "'$RESET' is the worker's account. Its password is VS_WORKER_PASSWORD in config/deploy.env; changing it means changing it there, re-rendering and restarting the worker."
+  [ "$(psql_main -c "select count(*) from users where username = '$RESET'")" = "1" ] || die "no account named '$RESET' (install/accounts.sh --list)"
+  new="$(openssl rand -hex 8)"
+  hash="$(printf '%s' "$new" | bcrypt_of)" || die "could not hash the new password"
+  # Sent on stdin: psql only fills in :'variables' there, not in -c.
+  printf "update users set password_hash = :'h' where username = :'u';\n" \
+    | psql_main -q -v u="$RESET" -v h="$hash" || die "the password was not changed"
+  f="$REPO_DIR/config/accounts.txt"
+  if [ -f "$f" ] && grep -Eq "^$RESET([[:space:]]|\$)" "$f"; then
+    tmp="$(mktemp "$f.XXXXXX")"; chmod 600 "$tmp"
+    awk -v n="$RESET" -v p="$new" '$1 == n { print n "  " p; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"
+  fi
+  echo "accounts: new password for $RESET: $new"
+  echo "          (also in config/accounts.txt if the account is listed there). Their old logins stop working at once;"
+  echo "          a browser that is still logged in keeps working until its session expires (24 hours)."
+  exit 0
+fi
+
 valid_name() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9._-]{1,49}$'; }
 ACCOUNTS_FILE="$REPO_DIR/config/accounts.txt"
 WANT="$(mktemp "${TMPDIR:-/tmp}/vs-accounts.XXXXXX")"
