@@ -37,12 +37,14 @@ vs_as_user() { # COMMAND... — run as the deploy user (cwd is kept)
 # TLS (the lab firewall does this for download.pytorch.org) the tools' own CA
 # bundles reject the connection; VS_CA_BUNDLE points them at the system store, which
 # has the site CA. Verification stays on. Empty/unset = tool defaults.
+# npm and npx are found next to $VS_NODE_BIN, ahead of whatever the system has.
 vs_as_user_net() {
+  local path; path="$(dirname "$VS_NODE_BIN"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   if [ -n "${VS_CA_BUNDLE:-}" ]; then
-    vs_as_user env PIP_CERT="$VS_CA_BUNDLE" REQUESTS_CA_BUNDLE="$VS_CA_BUNDLE" \
+    vs_as_user env PATH="$path" PIP_CERT="$VS_CA_BUNDLE" REQUESTS_CA_BUNDLE="$VS_CA_BUNDLE" \
       NODE_EXTRA_CA_CERTS="$VS_CA_BUNDLE" PIP_NO_INPUT=1 NEXT_TELEMETRY_DISABLED=1 "$@"
   else
-    vs_as_user env PIP_NO_INPUT=1 NEXT_TELEMETRY_DISABLED=1 "$@"
+    vs_as_user env PATH="$path" PIP_NO_INPUT=1 NEXT_TELEMETRY_DISABLED=1 "$@"
   fi
 }
 # Fetch pinned sources as the deploy user. Most pinned repositories are private and

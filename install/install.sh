@@ -25,7 +25,8 @@
 #    2  Unix user and directories         $VS_USER; home, sources, state, data root,
 #                                         work dir, upload cache, backup dir
 #    3  secrets                           install/gen-secrets.sh
-#    4  miniconda                         a private install at $VS_CONDA_ROOT
+#    4  miniconda and node                private installs at $VS_CONDA_ROOT and, when
+#                                         $VS_NODE_BIN is under $VS_HOME, there too
 #    5  systemd units                     rendered, installed, enabled — not started
 #    6  model weights                     checks they are in place (a person copies them)
 #    7  gateway and databases             fetch, npm ci, config, install/db-init.sh
@@ -63,6 +64,10 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-py312_25.1.1-2-Linux-x86_64.sh"
 MINICONDA_SHA256="4766d85b5f7d235ce250e998ebb5a8a8210cbd4f2b0fea4d2177b3ed9ea87884"
 
+# The Node this deployment installs for itself when VS_NODE_BIN is under $VS_HOME.
+NODE_URL="https://nodejs.org/dist/v24.10.0/node-v24.10.0-linux-x64.tar.xz"
+NODE_SHA256="2642f4428869aca32443660fd71b3918e2be1277a899bdcaeb64c93b54b5af17"
+
 die()  { printf 'install: %s\n' "$*" >&2; exit 1; }
 step() { STEP="$1"; shift; [ "$STEP" -ge "$FROM" ] || return 1; printf '\n== step %s: %s\n' "$STEP" "$*"; }
 did()  { printf '   %s\n' "$*"; }
@@ -97,15 +102,25 @@ if step 1 "prerequisites and configuration"; then
     esac
   fi
 
-  if [ -x "$VS_NODE_BIN" ]; then
-    nv="$("$VS_NODE_BIN" --version)"; major="${nv#v}"; major="${major%%.*}"
-    if [ "$major" -ge 20 ]; then good "node $nv ($VS_NODE_BIN)"; else bad "node $nv is older than 20"; fi
-  else bad "node at $VS_NODE_BIN (VS_NODE_BIN)"; fi
+  case "$VS_NODE_BIN" in
+    "$VS_HOME"/*) good "node: private install at $VS_NODE_BIN (step 4 puts it there)" ;;
+    *)
+      # A system node must be runnable by the deploy user, not just by you: a link
+      # into someone's home directory (nvm) is not.
+      real="$(readlink -f "$VS_NODE_BIN" 2>/dev/null || true)"
+      case "$real" in
+        /home/*) bad "VS_NODE_BIN=$VS_NODE_BIN resolves into a home directory ($real); the deploy user cannot run it. Set VS_NODE_BIN=$VS_HOME/node/bin/node to have one installed." ;;
+        *) if [ -x "$VS_NODE_BIN" ]; then
+             nv="$("$VS_NODE_BIN" --version)"; major="${nv#v}"; major="${major%%.*}"
+             if [ "$major" -ge 20 ]; then good "node $nv ($VS_NODE_BIN)"; else bad "node $nv is older than 20"; fi
+           else bad "node at $VS_NODE_BIN (VS_NODE_BIN)"; fi ;;
+      esac ;;
+  esac
   missing=""
-  for c in npm git openssl curl psql pg_dump sha256sum ss; do
+  for c in git openssl curl psql pg_dump sha256sum ss tar xz; do
     command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
   done
-  if [ -z "$missing" ]; then good "npm, git, openssl, curl, psql, pg_dump"; else bad "on PATH:$missing"; fi
+  if [ -z "$missing" ]; then good "git, openssl, curl, psql, pg_dump, tar, xz"; else bad "on PATH:$missing"; fi
 
   if command -v pg_isready >/dev/null 2>&1 && pg_isready -q -h "$VS_PG_HOST" -p "$VS_PG_PORT"; then
     good "PostgreSQL answers on $VS_PG_HOST:$VS_PG_PORT"
@@ -186,7 +201,22 @@ if step 3 "secrets"; then
 fi
 
 # ---------------------------------------------------------------------------------
-if step 4 "miniconda at $VS_CONDA_ROOT"; then
+if step 4 "miniconda at $VS_CONDA_ROOT, node at $VS_NODE_BIN"; then
+  if vs_as_user test -x "$VS_NODE_BIN" && ( cd / && vs_as_user "$VS_NODE_BIN" --version >/dev/null 2>&1 ); then
+    did "present: node $(cd / && vs_as_user "$VS_NODE_BIN" --version)"
+  else
+    case "$VS_NODE_BIN" in "$VS_HOME"/*/bin/node) ;; *) die "$VS_USER cannot run $VS_NODE_BIN, and it is not under $VS_HOME so it is not installed from here. Set VS_NODE_BIN=$VS_HOME/node/bin/node." ;; esac
+    node_root="$(dirname "$(dirname "$VS_NODE_BIN")")"
+    tmp="$(vs_as_user mktemp -d "${TMPDIR:-/tmp}/vs-node.XXXXXX")"
+    did "downloading $(basename "$NODE_URL")"
+    ( cd / && vs_as_user curl -fsSL -o "$tmp/node.tar.xz" "$NODE_URL" )
+    got="$(vs_as_user sha256sum "$tmp/node.tar.xz" | cut -d' ' -f1)"
+    [ "$got" = "$NODE_SHA256" ] || die "node archive checksum is $got, expected $NODE_SHA256 — not unpacked"
+    vs_as_user mkdir -p "$node_root"
+    ( cd / && vs_as_user tar -xJf "$tmp/node.tar.xz" -C "$node_root" --strip-components=1 )
+    vs_as_user rm -f "$tmp/node.tar.xz"; vs_as_user rmdir "$tmp"
+    did "installed: node $(cd / && vs_as_user "$VS_NODE_BIN" --version) at $node_root"
+  fi
   if vs_as_user test -x "$VS_CONDA_ROOT/bin/conda"; then
     did "present: $(cd / && vs_as_user "$VS_CONDA_ROOT/bin/conda" --version)"
   else

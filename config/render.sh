@@ -145,7 +145,9 @@ if [ "$INSTALL" -eq 1 ]; then
       echo "unchanged $dest"; return 0
     fi
     # Read as the operator, written as the owner: $VS_USER cannot read rendered/.
-    as_owner install -m "$mode" /dev/stdin "$dest" < "$src"
+    # The owner reads the content from its inherited stdin (it could not open the
+    # file itself), writes a private temporary file and moves it into place.
+    as_owner sh -c 'umask 077 && cat > "$1.tmp" && chmod "$2" "$1.tmp" && mv "$1.tmp" "$1"' sh "$dest" "$mode" < "$src"
     echo "installed $dest"
     changed=1
   }
